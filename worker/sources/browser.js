@@ -23,6 +23,24 @@ export async function openBrowser() {
   });
 }
 
+// Serializes every caller (searchJobs, the apply agent) through one promise chain, since
+// launchPersistentContext can only hold the profile lock once at a time. The chain itself
+// never rejects, so one failed run doesn't wedge the queue for the next caller.
+let chain = Promise.resolve();
+export function withBrowser(fn) {
+  const run = async () => {
+    const context = await openBrowser();
+    try {
+      return await fn(context);
+    } finally {
+      await context.close().catch(() => {});
+    }
+  };
+  const result = chain.then(run, run);
+  chain = result.then(() => {}, () => {});
+  return result;
+}
+
 const BLOCK_PATTERNS = [
   /just a moment/i,
   /verify you are human/i,

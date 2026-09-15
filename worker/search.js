@@ -1,7 +1,7 @@
 import admin from 'firebase-admin';
 import { emptyProfile } from './resume/extract.js';
-import { sources, openBrowser } from './sources/index.js';
-import { sleep } from './sources/browser.js';
+import { sources } from './sources/index.js';
+import { sleep, withBrowser } from './sources/browser.js';
 import { analyzeBatch, buildQueries, finalScore, heuristicScore, jobId, mergeJob } from './rank.js';
 
 const FieldValue = admin.firestore.FieldValue;
@@ -24,8 +24,7 @@ export async function searchJobs({ db, uid, log }, payload) {
   const found = new Map(); // jobId -> merged job
   const jobs = new Map(); // jobId -> job after merging with stored docs
   const runs = {};
-  const context = await openBrowser();
-  try {
+  await withBrowser(async (context) => {
     for (const name of wanted) {
       const adapter = sources[name];
       const runRef = userRef.collection('sourceRuns').doc(name);
@@ -113,9 +112,7 @@ export async function searchJobs({ db, uid, log }, payload) {
         await log(`${name}: details failed for ${externalId}: ${err.message}`);
       }
     }
-  } finally {
-    await context.close().catch(() => {});
-  }
+  });
 
   // 4. LLM analysis in batches of 10 for the top candidates without one.
   const analyzeLimit = payload.analyzeLimit || 120;
