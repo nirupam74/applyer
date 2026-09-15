@@ -1,7 +1,7 @@
 import type { Bytes, Timestamp } from 'firebase/firestore'
 
 export interface Task {
-  type: 'parseResume' | 'optimizeResume' | 'searchJobs'
+  type: 'parseResume' | 'optimizeResume' | 'searchJobs' | 'prepareDocuments' | 'applyToJob' | 'applyBatch'
   payload: Record<string, unknown>
   status: 'queued' | 'running' | 'done' | 'failed'
   log: string[]
@@ -126,6 +126,7 @@ export interface ResumeVersion {
   pageLimit?: number
   fits?: boolean
   fileName?: string
+  jobId?: string
   createdAt: Timestamp
 }
 
@@ -215,4 +216,48 @@ export interface SourceRun {
   jobsFound: number
   startedAt?: Timestamp
   finishedAt?: Timestamp
+}
+
+export interface ReviewField {
+  name: string
+  value: string
+  confidence: 'green' | 'yellow' | 'red'
+}
+
+export interface Application {
+  jobId: string
+  status: 'preparing' | 'filling' | 'submitted' | 'blocked' | 'failed'
+  log: string[]
+  resumeVersionId?: string
+  coverLetterId?: string
+  review?: { fields: ReviewField[] }
+  screenshots?: Bytes[]
+  submittedAt?: Timestamp
+  confirmation?: string
+  error?: string
+  portalUrl?: string
+  createdAt: Timestamp
+}
+
+export interface CoverLetter {
+  jobId: string
+  resumeVersionId: string
+  text: string
+  docxBytes: Bytes
+  pdfBytes: Bytes
+  fileName: string
+  createdAt: Timestamp
+}
+
+export interface Answer {
+  question: string
+  answer: string
+  tags: string[]
+  source: 'user' | 'generated'
+  approved: boolean
+}
+
+export interface ApplicationSettings {
+  email: string
+  autoSubmit: boolean
 }

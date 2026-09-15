@@ -2,8 +2,12 @@ import { onSnapshot } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useUser } from '../auth'
+import TaskStatus from '../components/TaskStatus'
+import { useApplicationForJob } from '../lib/applications'
 import { SOURCE_LABEL, postedLabel, setJobStatus } from '../lib/jobs'
+import { safeUrl } from '../lib/download'
 import { userDoc } from '../lib/paths'
+import { enqueueTask } from '../lib/tasks'
 import type { Job } from '../lib/types'
 import { ScorePill, StatusPill } from './Jobs'
 
@@ -12,16 +16,23 @@ export default function JobDetail() {
   const uid = user!.uid
   const { id } = useParams()
   const [job, setJob] = useState<Job | null | undefined>(undefined)
+  const [applyTaskId, setApplyTaskId] = useState<string | null>(null)
+  const existingApplication = useApplicationForJob(uid, id ?? '')
 
   useEffect(() => {
     if (!id) return
     return onSnapshot(userDoc(uid, 'jobs', id), (snap) => setJob(snap.exists() ? (snap.data() as Job) : null))
   }, [uid, id])
 
+  async function applyNow() {
+    if (!id) return
+    setApplyTaskId(await enqueueTask(uid, 'applyToJob', { jobId: id }))
+  }
+
   if (job === undefined) return <p className="text-sm text-[var(--text-muted)]">Loading...</p>
   if (!job || !id) return <p className="text-sm text-[var(--danger)]">Job not found.</p>
 
-  const apply = job.sources[0]?.applyUrl ?? job.sources[0]?.url
+  const apply = safeUrl(job.sources[0]?.applyUrl ?? job.sources[0]?.url)
   const btn = 'rounded-lg px-4 py-2 text-sm font-semibold'
   const a = job.analysis
 
@@ -46,15 +57,26 @@ export default function JobDetail() {
           </p>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             {job.sources.map((s) => (
-              <a key={s.name} href={s.url} target="_blank" rel="noreferrer" className="mr-3 underline hover:text-[var(--accent)]">
+              <a key={s.name} href={safeUrl(s.url) ?? undefined} target="_blank" rel="noreferrer" className="mr-3 underline hover:text-[var(--accent)]">
                 {SOURCE_LABEL[s.name] ?? s.name}
               </a>
             ))}
           </p>
+          {existingApplication && (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Applied ·{' '}
+              <Link to={`/applications/${existingApplication.id}`} className="text-[var(--accent)] hover:underline">
+                view application
+              </Link>
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
+          <button type="button" onClick={() => void applyNow()} className={`${btn} bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]`}>
+            Apply now
+          </button>
           {apply && (
-            <a href={apply} target="_blank" rel="noreferrer" className={`${btn} bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]`}>
+            <a href={apply} target="_blank" rel="noreferrer" className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
               Apply
             </a>
           )}
@@ -66,6 +88,8 @@ export default function JobDetail() {
           </button>
         </div>
       </div>
+
+      {applyTaskId && <TaskStatus uid={uid} taskId={applyTaskId} />}
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5">
         <h2 className="text-base font-semibold text-[var(--text)]">Resume-to-job analysis</h2>

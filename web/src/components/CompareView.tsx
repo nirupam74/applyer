@@ -1,6 +1,7 @@
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { db } from '../firebase'
+import { downloadBytes } from '../lib/download'
 import { enqueueTask } from '../lib/tasks'
 import type { Resume, ResumeVersion, StructuredResume } from '../lib/types'
 import AtsCard from './AtsCard'
@@ -51,28 +52,22 @@ export default function CompareView({
     await updateDoc(doc(db, 'users', uid, 'resumeVersions', versionId), { structured })
   }
 
-  function downloadBytes(bytes: Uint8Array, mime: string, extension: string) {
-    const blob = new Blob([bytes], { type: mime })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${version!.fileName || `${profileName || 'Resume'} - Resume`}.${extension}`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   function downloadDocx() {
     if (!version) return
     downloadBytes(
       version.docxBytes.toUint8Array(),
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'docx',
+      `${version.fileName || `${profileName || 'Resume'} - Resume`}.docx`,
     )
   }
 
   function downloadPdf() {
     if (!version?.pdfBytes) return
-    downloadBytes(version.pdfBytes.toUint8Array(), 'application/pdf', 'pdf')
+    downloadBytes(
+      version.pdfBytes.toUint8Array(),
+      'application/pdf',
+      `${version.fileName || `${profileName || 'Resume'} - Resume`}.pdf`,
+    )
   }
 
   if (resume === undefined || version === undefined) {
