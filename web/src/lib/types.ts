@@ -121,6 +121,11 @@ export interface ResumeVersion {
   structured: StructuredResume
   ats: AtsReport
   docxBytes: Bytes
+  pdfBytes?: Bytes
+  pages?: number
+  pageLimit?: number
+  fits?: boolean
+  fileName?: string
   createdAt: Timestamp
 }
 

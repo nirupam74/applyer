@@ -1,95 +1,153 @@
-import { Document, Packer, Paragraph, TextRun, AlignmentType, LevelFormat } from 'docx';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  AlignmentType,
+  LevelFormat,
+  BorderStyle,
+  TabStopType,
+  TabStopPosition,
+} from 'docx';
 
-const FONT = 'Calibri'; // ponytail: true font fallback chains are not a DOCX concept; Calibri
-// is the primary and Word/mammoth substitute Arial automatically when Calibri is unavailable.
-const BODY_SIZE = 22; // 11pt in half-points
-const NAME_SIZE = 32; // 16pt, the only large heading
-const HEADING_SIZE = 24; // 12pt
-
+const FONT = 'Calibri'; // ponytail: DOCX has no fallback chains; Word substitutes Arial when Calibri is missing.
 const BULLETS_REF = 'applyer-bullets';
 
-function bulletParagraph(text) {
+// Fit levels: the handler walks down this list until the rendered PDF fits the user's page limit.
+// Sizes are half-points, spacing/margins are twips (1440 = 1 inch).
+export const FIT_LEVELS = [
+  { body: 22, name: 32, heading: 22, after: 60, sectionBefore: 160, margin: 1008 },
+  { body: 21, name: 30, heading: 21, after: 40, sectionBefore: 120, margin: 864 },
+  { body: 20, name: 28, heading: 20, after: 20, sectionBefore: 100, margin: 720 },
+];
+
+function runs(parts, L) {
+  return parts.map((p) => new TextRun({ text: p.text, font: FONT, size: p.size || L.body, bold: !!p.bold }));
+}
+
+function bullet(text, L) {
   return new Paragraph({
     numbering: { reference: BULLETS_REF, level: 0 },
-    children: [new TextRun({ text, font: FONT, size: BODY_SIZE })],
+    spacing: { after: 0 },
+    children: runs([{ text }], L),
   });
 }
 
-function bodyParagraph(text, opts = {}) {
+function centered(parts, L, after) {
+  return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after }, children: runs(parts, L) });
+}
+
+function heading(text, L) {
   return new Paragraph({
-    spacing: { after: 80 },
-    children: [new TextRun({ text, font: FONT, size: BODY_SIZE, bold: !!opts.bold })],
+    spacing: { before: L.sectionBefore, after: 40 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '000000', space: 1 } },
+    children: runs([{ text: text.toUpperCase(), bold: true, size: L.heading }], L),
   });
 }
 
-function sectionHeading(text) {
+// "Bold title  |  regular subtitle" on the left, bold dates flush right via a right tab stop.
+function entryLine(title, subtitle, dates, L) {
+  const parts = [{ text: title, bold: true }];
+  if (subtitle) parts.push({ text: `  |  ${subtitle}` });
+  if (dates) parts.push({ text: `\t${dates}`, bold: true });
   return new Paragraph({
-    spacing: { before: 200, after: 80 },
-    children: [new TextRun({ text: text.toUpperCase(), font: FONT, size: HEADING_SIZE, bold: true })],
+    spacing: { before: L.after + 40, after: 20 },
+    tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+    children: runs(parts, L),
   });
 }
 
-function contactLine(personal) {
-  const parts = [personal.email, personal.phone, personal.location, personal.linkedin].filter(Boolean);
-  return bodyParagraph(parts.join(' | '));
+// Two bullets are duplicates when they share at least half of the shorter one's distinct words.
+function overlaps(a, b) {
+  const words = (s) => new Set(s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2));
+  const A = words(a);
+  const B = words(b);
+  if (!A.size || !B.size) return false;
+  let shared = 0;
+  for (const w of A) if (B.has(w)) shared++;
+  return shared / Math.min(A.size, B.size) >= 0.5;
 }
 
-// buildDocx(structured, personal) -> Buffer. Single column, no tables, no images,
-// Calibri 11pt, name as the only large heading, caps section headings, real numbering bullets.
-export function buildDocx(structured, personal = {}) {
+function dateRange(start, end) {
+  return [start, end].filter(Boolean).join(' - ');
+}
+
+const SKILL_LABELS = {
+  marketing: 'Marketing',
+  creative: 'Design & content',
+  technical: 'Technical',
+  programming: 'Development',
+  tools: 'Tools',
+  business: 'Business',
+  communication: 'Communication',
+  leadership: 'Leadership',
+  industry: 'Industry',
+  certifications: 'Certifications',
+  languages: 'Languages',
+};
+
+// buildDocx(structured, personal, opts) -> Promise<Buffer>.
+// Layout mirrors the user's reference resume: centered name + contact lines, ruled caps headings,
+// "Title | Company" entries with right-aligned dates, bullets, skills grouped per line.
+// Single column, no tables, no images (ATS-safe). opts.level picks a FIT_LEVELS entry.
+export function buildDocx(structured, personal = {}, opts = {}) {
+  const L = FIT_LEVELS[Math.min(opts.level || 0, FIT_LEVELS.length - 1)];
   const children = [];
 
-  children.push(
-    new Paragraph({
-      children: [new TextRun({ text: personal.name || '', font: FONT, size: NAME_SIZE, bold: true })],
-    })
-  );
-  children.push(contactLine(personal));
+  children.push(centered([{ text: (personal.name || '').toUpperCase(), bold: true, size: L.name }], L, 40));
+  const line1 = [personal.email, personal.phone, personal.location].filter(Boolean);
+  const line2 = [personal.website || personal.portfolio, personal.linkedin, opts.availability ? `Availability: ${opts.availability}` : '']
+    .filter(Boolean);
+  if (line1.length) children.push(centered([{ text: line1.join('  |  ') }], L, 0));
+  if (line2.length) children.push(centered([{ text: line2.join('  |  ') }], L, 0));
 
   if (structured.summary) {
-    children.push(sectionHeading('Summary'));
-    children.push(bodyParagraph(structured.summary));
+    children.push(heading('Professional summary', L));
+    children.push(new Paragraph({ spacing: { after: L.after }, children: runs([{ text: structured.summary }], L) }));
   }
 
-  if (structured.experience && structured.experience.length) {
-    children.push(sectionHeading('Experience'));
-    for (const role of structured.experience) {
-      const titleLine = [role.title, role.company].filter(Boolean).join(', ');
-      const dateLine = [role.start, role.end].filter(Boolean).join(' - ');
-      children.push(bodyParagraph([titleLine, dateLine].filter(Boolean).join('  '), { bold: true }));
-      for (const bullet of [...(role.responsibilities || []), ...(role.achievements || [])]) {
-        children.push(bulletParagraph(bullet));
-      }
+  if (structured.experience?.length) {
+    children.push(heading('Relevant experience', L));
+    for (const e of structured.experience) {
+      children.push(entryLine(e.title, e.company, dateRange(e.start, e.end), L));
+      const resp = e.responsibilities || [];
+      const extra = (e.achievements || []).filter((a) => !resp.some((r) => overlaps(r, a)));
+      for (const b of [...resp, ...extra]) children.push(bullet(b, L));
     }
   }
 
-  if (structured.education && structured.education.length) {
-    children.push(sectionHeading('Education'));
-    for (const edu of structured.education) {
-      const line = [edu.degree, edu.institution, edu.graduation].filter(Boolean).join(', ');
-      children.push(bodyParagraph(line));
+  if (structured.projects?.length) {
+    children.push(heading('Projects', L));
+    for (const p of structured.projects) {
+      children.push(entryLine(p.name, p.technologies?.length ? p.technologies.join(', ') : '', p.link || '', L));
+      if (p.description) children.push(bullet(p.description, L));
     }
   }
 
-  if (structured.projects && structured.projects.length) {
-    children.push(sectionHeading('Projects'));
-    for (const project of structured.projects) {
-      children.push(bodyParagraph(project.name, { bold: true }));
-      if (project.description) children.push(bodyParagraph(project.description));
+  if (structured.education?.length) {
+    children.push(heading('Education', L));
+    for (const ed of structured.education) {
+      children.push(entryLine(ed.degree || ed.program, ed.institution, ed.graduation, L));
+      const detail = [
+        [ed.program, ed.major ? `specialization in ${ed.major}` : '', ed.minor ? `minor in ${ed.minor}` : ''].filter(Boolean).join(', '),
+        ed.gpa ? `GPA ${ed.gpa}` : '',
+      ].filter(Boolean).join('  |  ');
+      if (detail) children.push(bullet(detail, L));
+      if (ed.coursework?.length) children.push(bullet(`Relevant coursework: ${ed.coursework.join(', ')}`, L));
     }
   }
 
-  if (structured.skills) {
-    const skillLines = Object.entries(structured.skills)
-      .filter(([, list]) => Array.isArray(list) && list.length)
-      .map(([, list]) => list.join(', '));
-    if (skillLines.length) {
-      children.push(sectionHeading('Skills'));
-      children.push(bodyParagraph(skillLines.join(' | ')));
-    }
+  const skills = structured.skills || {};
+  const skillLines = Object.entries(SKILL_LABELS)
+    .filter(([k]) => skills[k]?.length)
+    .map(([k, label]) => `${label}: ${skills[k].join('  |  ')}`);
+  if (skillLines.length) {
+    children.push(heading('Skills', L));
+    for (const line of skillLines) children.push(bullet(line, L));
   }
 
   const doc = new Document({
+    styles: { default: { document: { run: { font: FONT, size: L.body } } } },
     numbering: {
       config: [
         {
@@ -100,13 +158,18 @@ export function buildDocx(structured, personal = {}) {
               format: LevelFormat.BULLET,
               text: '•',
               alignment: AlignmentType.LEFT,
-              style: { paragraph: { indent: { left: 360, hanging: 360 } } },
+              style: { paragraph: { indent: { left: 300, hanging: 200 } } },
             },
           ],
         },
       ],
     },
-    sections: [{ children }],
+    sections: [
+      {
+        properties: { page: { margin: { top: L.margin, bottom: L.margin, left: L.margin, right: L.margin } } },
+        children,
+      },
+    ],
   });
 
   return Packer.toBuffer(doc);

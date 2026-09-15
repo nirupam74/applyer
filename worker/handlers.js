@@ -2,7 +2,9 @@ import admin from 'firebase-admin';
 import { bytesToText } from './resume/parse.js';
 import { extractProfile, emptyProfile } from './resume/extract.js';
 import { optimizeResume as runOptimize } from './resume/optimize.js';
-import { buildDocx } from './resume/docx.js';
+import { buildDocx, FIT_LEVELS } from './resume/docx.js';
+import { docxToPdf } from './resume/pdf.js';
+import { condenseStructured } from './resume/optimize.js';
 
 const FieldValue = admin.firestore.FieldValue;
 
@@ -110,8 +112,11 @@ export async function optimizeResume({ db, uid, log }, payload) {
     section,
   });
 
-  await log('building DOCX');
-  const docxBuffer = await buildDocx(structured, profile.personal || {});
+  const settingsSnap = await userRef.collection('settings').doc('resume').get();
+  const pageLimit = Number(settingsSnap.exists && settingsSnap.data().maxPages) || 1;
+  const fitted = await fitToPages({ structured, profile, pageLimit, log });
+  const docxBuffer = fitted.docx;
+  Object.assign(structured, fitted.structured);
 
   const data = {
     resumeId,
@@ -119,6 +124,11 @@ export async function optimizeResume({ db, uid, log }, payload) {
     structured,
     ats,
     docxBytes: docxBuffer,
+    pdfBytes: fitted.pdf,
+    pages: fitted.pages,
+    pageLimit,
+    fits: fitted.pages <= pageLimit,
+    fileName: `${(profile.personal && profile.personal.name) || 'Resume'} - Resume`,
     createdAt: (existing && existing.createdAt) || FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
@@ -129,3 +139,29 @@ export async function optimizeResume({ db, uid, log }, payload) {
 }
 
 export const handlers = { parseResume, optimizeResume };
+
+// fitToPages: build DOCX, render to PDF, and shrink (layout levels, then LLM condensing)
+// until the real page count is within pageLimit. Returns the best attempt if nothing fits.
+async function fitToPages({ structured, profile, pageLimit, log }) {
+  const personal = profile.personal || {};
+  const opts = { availability: profile.availability || '' };
+  let current = structured;
+  let best = null;
+  for (let round = 0; round < 3; round++) {
+    for (let level = 0; level < FIT_LEVELS.length; level++) {
+      await log(`building DOCX (round ${round + 1}, layout level ${level + 1})`);
+      const docx = await buildDocx(current, personal, { ...opts, level });
+      const { pdf, pages } = await docxToPdf(docx);
+      await log(`rendered ${pages} page(s), limit ${pageLimit}`);
+      const attempt = { docx, pdf, pages, structured: current, level, round };
+      if (!best || pages < best.pages) best = attempt;
+      if (pages <= pageLimit) return attempt;
+    }
+    if (round < 2) {
+      await log('still too long, condensing content with the LLM');
+      current = await condenseStructured({ structured: current, profile, pages: best.pages, targetPages: pageLimit });
+    }
+  }
+  await log(`could not fit within ${pageLimit} page(s); keeping the shortest version (${best.pages} pages)`);
+  return best;
+}

@@ -133,7 +133,7 @@ export async function optimizeResume({ profile, originalText, existingStructured
 
   const shape = `{"structured": ${STRUCTURED_SHAPE}, "ats": ${ATS_SHAPE}}`;
   const prompt = [
-    'Produce a full ATS-optimized resume, structured by section, plus an ATS report. Every experience entry must carry all of its bullets from the profile, rewritten to be achievement-focused; never drop a role or a bullet.',
+    'Produce a full ATS-optimized resume, structured by section, plus an ATS report. Every experience entry must carry all of its bullets from the profile, rewritten to be achievement-focused; never drop a role or a bullet. Achievements must not restate a responsibility bullet: a result belongs either in the bullet or in achievements, never both.',
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Original resume text:\n${originalText || ''}`,
     detectedBlock,
@@ -142,4 +142,17 @@ export async function optimizeResume({ profile, originalText, existingStructured
   const structured = normalizeStructured(out.structured);
   const ats = normalizeAts(out.ats, problems);
   return { structured, ats };
+}
+
+// condenseStructured({ structured, profile, pages, targetPages }) -> structured
+// Asks the LLM to shorten the resume so it fits targetPages, keeping every role and every fact.
+export async function condenseStructured({ structured, profile, pages, targetPages }) {
+  const shape = `{"structured": ${STRUCTURED_SHAPE}}`;
+  const prompt = [
+    `This resume renders to ${pages} page(s) but must fit on ${targetPages} page(s). Condense it: tighten every bullet to one line where possible, merge overlapping bullets, cap each role at 3-4 bullets (keep the strongest, metric-bearing ones), shorten the summary to 40-60 words, keep at most 8 coursework items, and trim skills to the strongest 5-7 per category, keeping at most 5 skill categories (fold the rest into the closest kept category, leaving the others as empty arrays). Keep every role, project, degree, date, and number. Do not add anything.`,
+    `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
+    `Current structured resume:\n${JSON.stringify(structured)}`,
+  ].join('\n\n');
+  const out = await ask(prompt, shape);
+  return normalizeStructured(out.structured);
 }

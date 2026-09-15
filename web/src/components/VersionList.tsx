@@ -98,6 +98,19 @@ export default function VersionList({
             <span className="shrink-0 rounded-full bg-[var(--success-bg)] px-2 py-0.5 text-xs font-semibold text-[var(--success)]">
               {v.ats?.score ?? 0}
             </span>
+            {v.pages !== undefined && (
+              <span
+                className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  v.fits === false
+                    ? 'bg-[var(--warning-bg)] text-[var(--warning)]'
+                    : 'bg-[var(--bg)] text-[var(--text-muted)]'
+                }`}
+              >
+                {v.fits === false
+                  ? `${v.pages} page${v.pages === 1 ? '' : 's'}, limit ${v.pageLimit}`
+                  : `${v.pages} page${v.pages === 1 ? '' : 's'}`}
+              </span>
+            )}
           </div>
           <div className="mt-2 flex items-center gap-3 text-xs text-[var(--text-muted)]">
             {defaultId === v.id ? (

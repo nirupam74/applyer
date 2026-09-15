@@ -34,6 +34,6 @@ test('buildDocx round-trips through bytesToText with name and company', async ()
     buf,
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   );
-  assert.match(text, /Jane Doe/);
+  assert.match(text, /Jane Doe/i);
   assert.match(text, /Acme Corp/);
 });

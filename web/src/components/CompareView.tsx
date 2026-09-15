@@ -51,17 +51,28 @@ export default function CompareView({
     await updateDoc(doc(db, 'users', uid, 'resumeVersions', versionId), { structured })
   }
 
-  function download() {
-    if (!version) return
-    const blob = new Blob([version.docxBytes.toUint8Array()], {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    })
+  function downloadBytes(bytes: Uint8Array, mime: string, extension: string) {
+    const blob = new Blob([bytes], { type: mime })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${profileName || 'Resume'} - Resume.docx`
+    a.download = `${version!.fileName || `${profileName || 'Resume'} - Resume`}.${extension}`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  function downloadDocx() {
+    if (!version) return
+    downloadBytes(
+      version.docxBytes.toUint8Array(),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'docx',
+    )
+  }
+
+  function downloadPdf() {
+    if (!version?.pdfBytes) return
+    downloadBytes(version.pdfBytes.toUint8Array(), 'application/pdf', 'pdf')
   }
 
   if (resume === undefined || version === undefined) {
@@ -76,16 +87,50 @@ export default function CompareView({
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-base font-semibold text-[var(--text)]">{version.label || 'Optimized version'}</h3>
-        <button
-          type="button"
-          onClick={download}
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
-        >
-          Download DOCX
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={downloadDocx}
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
+          >
+            Download DOCX
+          </button>
+          {version.pdfBytes && (
+            <button
+              type="button"
+              onClick={downloadPdf}
+              className="rounded-lg border border-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+            >
+              Download PDF
+            </button>
+          )}
+        </div>
       </div>
 
-      <AtsCard ats={version.ats} />
+      <div className="flex flex-col gap-2">
+        <AtsCard ats={version.ats} />
+        {version.pages !== undefined && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                version.fits === false
+                  ? 'bg-[var(--warning-bg)] text-[var(--warning)]'
+                  : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
+              }`}
+            >
+              {version.fits === false
+                ? `${version.pages} page${version.pages === 1 ? '' : 's'}, limit ${version.pageLimit}`
+                : `${version.pages} page${version.pages === 1 ? '' : 's'}`}
+            </span>
+            {version.fits === false && (
+              <p className="text-sm text-[var(--warning)]">
+                This version runs to {version.pages} pages; the limit is {version.pageLimit}. Regenerate or shorten
+                sections.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div>
