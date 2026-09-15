@@ -6,6 +6,7 @@ import { analyzeBatch, buildQueries, finalScore, heuristicScore, jobId, mergeJob
 
 const FieldValue = admin.firestore.FieldValue;
 const TOP_N = 100;
+const BLOCKED_COOLDOWN_MS = 24 * 3600e3; // a source that was blocked is left alone for a day
 
 // searchJobs payload { sources?: string[], pagesPerQuery?, detailLimit?, analyzeLimit? }
 export async function searchJobs({ db, uid, log }, payload) {
@@ -28,6 +29,12 @@ export async function searchJobs({ db, uid, log }, payload) {
     for (const name of wanted) {
       const adapter = sources[name];
       const runRef = userRef.collection('sourceRuns').doc(name);
+      const last = (await runRef.get()).data();
+      if (last && last.status === 'blocked' && last.finishedAt && Date.now() - last.finishedAt.toMillis() < BLOCKED_COOLDOWN_MS) {
+        runs[name] = { status: 'skipped', message: 'blocked on the last run', jobsFound: 0 };
+        await log(`${name}: skipped, blocked ${Math.round((Date.now() - last.finishedAt.toMillis()) / 3600e3)} h ago`);
+        continue;
+      }
       await runRef.set({ status: 'running', startedAt: FieldValue.serverTimestamp(), message: '', jobsFound: 0 }, { merge: true });
       let status = 'ok';
       let message = '';
