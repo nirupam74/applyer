@@ -12,6 +12,7 @@ function getInitialTheme(): Theme {
 
 const navItems = [
   { to: '/home', label: 'Home' },
+  { to: '/jobs', label: 'Jobs' },
   { to: '/resume', label: 'Resume' },
   { to: '/profile', label: 'Profile' },
 ]

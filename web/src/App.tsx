@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './auth'
 import ForgotPassword from './pages/ForgotPassword'
 import Home from './pages/Home'
+import JobDetail from './pages/JobDetail'
+import Jobs from './pages/Jobs'
 import Login from './pages/Login'
 import Profile from './pages/Profile'
 import Resume from './pages/Resume'
@@ -22,6 +24,8 @@ export default function App() {
       >
         <Route index element={<Navigate to="/home" replace />} />
         <Route path="home" element={<Home />} />
+        <Route path="jobs" element={<Jobs />} />
+        <Route path="jobs/:id" element={<JobDetail />} />
         <Route path="resume" element={<Resume />} />
         <Route path="profile" element={<Profile />} />
       </Route>

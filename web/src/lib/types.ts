@@ -1,7 +1,7 @@
 import type { Bytes, Timestamp } from 'firebase/firestore'
 
 export interface Task {
-  type: 'parseResume' | 'optimizeResume'
+  type: 'parseResume' | 'optimizeResume' | 'searchJobs'
   payload: Record<string, unknown>
   status: 'queued' | 'running' | 'done' | 'failed'
   log: string[]
@@ -170,4 +170,49 @@ export function emptyProfile(): Profile {
     availability: '',
     demographics: { citizenship: '', ethnicity: '' },
   }
+}
+
+export interface JobSource {
+  name: string
+  url: string
+  applyUrl: string
+}
+
+export interface JobAnalysis {
+  matchPct: number | null
+  strong: string[]
+  missing: string[]
+  advantages: string[]
+  concerns: string[]
+  recommendation: 'apply' | 'maybe' | 'skip'
+}
+
+export interface Job {
+  title: string
+  company: string
+  location: string
+  workMode: 'remote' | 'hybrid' | 'onsite' | 'unknown'
+  salary: string | null
+  employmentType: string
+  seniority?: string
+  description: string
+  postedAt: Timestamp | null
+  postedText: string | null
+  sources: JobSource[]
+  score: number
+  heuristic: number
+  matchPct: number | null
+  analysis: JobAnalysis | null
+  rank: number | null
+  status: 'new' | 'saved' | 'dismissed' | 'applied'
+  discoveredAt: Timestamp
+  updatedAt: Timestamp
+}
+
+export interface SourceRun {
+  status: 'running' | 'ok' | 'blocked' | 'error'
+  message: string
+  jobsFound: number
+  startedAt?: Timestamp
+  finishedAt?: Timestamp
 }
