@@ -16,7 +16,8 @@ function squash(s) {
 // Dedup key = normalized company|title|city. Location keeps only the first
 // comma segment so "Toronto, ON" and "Toronto, Ontario, Canada" collide.
 export function dedupKey(job) {
-  const company = squash(String(job.company || '').replace(COMPANY_NOISE, ''));
+  // ponytail: first company token only, so "Klick" and "Klick Health" collide; upgrade to a fuzzy match if false merges appear
+  const company = squash(String(job.company || '').replace(COMPANY_NOISE, '')).split(' ')[0] || '';
   const title = squash(String(job.title || '').replace(TITLE_NOISE, ''));
   const city = squash(String(job.location || '').split(',')[0]);
   return `${company}|${title}|${city}`;

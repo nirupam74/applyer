@@ -19,6 +19,7 @@ test('dedupKey ignores case, punctuation, company suffixes and location detail',
   const b = dedupKey({ company: 'ACME', title: 'Digital marketing intern', location: 'Toronto, Ontario, Canada' });
   assert.equal(a, b);
   assert.notEqual(a, dedupKey({ company: 'Acme', title: 'Digital Marketing Intern', location: 'Ottawa, ON' }));
+  assert.equal(dedupKey({ company: 'Klick Health', title: 'Project Coordinator', location: 'Toronto, ON' }), dedupKey({ company: 'Klick', title: 'Project Coordinator', location: 'Toronto' }));
 });
 
 test('buildQueries splits slash titles and normalizes GTA', () => {
