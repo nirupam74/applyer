@@ -87,6 +87,7 @@ export interface Profile {
   preferences: Preferences
   workAuthorization: string
   availability: string
+  demographics: { citizenship: string; ethnicity: string }
   updatedAt?: Timestamp
 }
 
@@ -162,5 +163,6 @@ export function emptyProfile(): Profile {
     },
     workAuthorization: '',
     availability: '',
+    demographics: { citizenship: '', ethnicity: '' },
   }
 }

@@ -137,7 +137,7 @@ const PROFILE_SHAPE = `{
 
 // extractProfile(text) -> Profile, via one LLM call, normalized so every key is present.
 export async function extractProfile(text) {
-  const prompt = `Extract a structured candidate profile from the resume text below. Only use facts stated in the text.\n\nResume text:\n${text}`;
+  const prompt = `Extract a structured candidate profile from the resume text below. Only use facts stated in the text.\nSkills: include every skill explicitly listed, plus skills that the described experience and projects clearly demonstrate (for example a role that ran Instagram campaigns demonstrates social media marketing; building an app in Swift demonstrates iOS development). Put each inferred skill in the most fitting category and also in the skills array of the role that demonstrates it. Never infer employers, titles, dates, degrees, certifications, or numbers.\n\nResume text:\n${text}`;
   const raw = await ask(prompt, PROFILE_SHAPE);
   return normalizeProfile(raw);
 }

@@ -115,7 +115,7 @@ export async function optimizeResume({ db, uid, log }, payload) {
 
   const data = {
     resumeId,
-    label: (existing && existing.label) || 'Optimized resume',
+    label: (existing && existing.label) || 'Optimized from ' + (resume.name || 'resume'),
     structured,
     ats,
     docxBytes: docxBuffer,

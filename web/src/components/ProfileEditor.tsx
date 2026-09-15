@@ -276,6 +276,16 @@ export default function ProfileEditor<T extends EditableResume>({ value, onChang
                 value={value.availability}
                 onChange={(v) => set('availability' as keyof T, v as T[keyof T])}
               />
+              <TextField
+                label="Citizenship"
+                value={value.demographics?.citizenship ?? ''}
+                onChange={(v) => set('demographics' as keyof T, { ...(value.demographics ?? { citizenship: '', ethnicity: '' }), citizenship: v } as T[keyof T])}
+              />
+              <TextField
+                label="Ethnicity (for optional EEO questions)"
+                value={value.demographics?.ethnicity ?? ''}
+                onChange={(v) => set('demographics' as keyof T, { ...(value.demographics ?? { citizenship: '', ethnicity: '' }), ethnicity: v } as T[keyof T])}
+              />
             </div>
           </Section>
         </>

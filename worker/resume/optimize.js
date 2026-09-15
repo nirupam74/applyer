@@ -9,6 +9,14 @@ import {
   coerceString,
 } from './extract.js';
 
+const STRUCTURED_SHAPE = `{
+  "summary": string (40-120 words),
+  "education": [{"institution": string, "degree": string, "program": string, "major": string, "minor": string, "gpa": string, "graduation": string, "coursework": string[]}],
+  "experience": [{"company": string, "title": string, "employmentType": string, "start": string, "end": string, "responsibilities": string[] (3-6 rewritten bullets, strong verbs, keep every fact), "achievements": string[], "metrics": string[], "technologies": string[], "skills": string[], "industry": string}],
+  "projects": [{"name": string, "description": string, "technologies": string[], "link": string}],
+  "skills": {"technical": string[], "tools": string[], "programming": string[], "marketing": string[], "business": string[], "communication": string[], "leadership": string[], "creative": string[], "industry": string[], "certifications": string[], "languages": string[]}
+}`;
+
 const SECTIONS = ['summary', 'education', 'experience', 'projects', 'skills'];
 
 function normalizeSection(section, value) {
@@ -109,9 +117,9 @@ export async function optimizeResume({ profile, originalText, existingStructured
   const base = existingStructured ? normalizeStructured(existingStructured) : emptyStructured();
 
   if (section) {
-    const shape = `{"${section}": <same shape as the "${section}" field of the structured resume>, "ats": ${ATS_SHAPE}}`;
+    const shape = `{"${section}": <the "${section}" field of ${STRUCTURED_SHAPE}>, "ats": ${ATS_SHAPE}}`;
     const prompt = [
-      `Regenerate only the "${section}" section of an ATS-optimized resume. Keep every other section as-is; do not return them.`,
+      `Regenerate only the "${section}" section of an ATS-optimized resume. Keep every other section as-is; do not return them. The new "${section}" must be a materially improved rewrite, not a copy of the existing one.`,
       `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
       `Original resume text:\n${originalText || ''}`,
       `Existing structured resume for context:\n${JSON.stringify(base)}`,
@@ -123,9 +131,9 @@ export async function optimizeResume({ profile, originalText, existingStructured
     return { structured, ats };
   }
 
-  const shape = `{"structured": {"summary": string, "education": [...], "experience": [...], "projects": [...], "skills": {...}}, "ats": ${ATS_SHAPE}}`;
+  const shape = `{"structured": ${STRUCTURED_SHAPE}, "ats": ${ATS_SHAPE}}`;
   const prompt = [
-    'Produce a full ATS-optimized resume, structured by section, plus an ATS report.',
+    'Produce a full ATS-optimized resume, structured by section, plus an ATS report. Every experience entry must carry all of its bullets from the profile, rewritten to be achievement-focused; never drop a role or a bullet.',
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Original resume text:\n${originalText || ''}`,
     detectedBlock,
