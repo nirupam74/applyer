@@ -5,6 +5,7 @@ import { optimizeResume as runOptimize } from './resume/optimize.js';
 import { buildDocx, FIT_LEVELS } from './resume/docx.js';
 import { docxToPdf } from './resume/pdf.js';
 import { condenseStructured } from './resume/optimize.js';
+import { searchJobs } from './search.js';
 
 const FieldValue = admin.firestore.FieldValue;
 
@@ -138,7 +139,7 @@ export async function optimizeResume({ db, uid, log }, payload) {
   return { versionId: versionRef.id };
 }
 
-export const handlers = { parseResume, optimizeResume };
+export const handlers = { parseResume, optimizeResume, searchJobs };
 
 // fitToPages: build DOCX, render to PDF, and shrink (layout levels, then LLM condensing)
 // until the real page count is within pageLimit. Returns the best attempt if nothing fits.

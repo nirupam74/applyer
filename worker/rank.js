@@ -1,0 +1,192 @@
+import { createHash } from 'node:crypto';
+import { ask } from './llm.js';
+
+const COMPANY_NOISE = /\b(inc|inc\.|ltd|ltd\.|llc|corp|corporation|co|company|limited|group|canada|the)\b/gi;
+const TITLE_NOISE = /\((?:[^)]*)\)|\b(f\/m\/d|m\/f\/d|urgent|hiring now|new)\b|[-:|,]\s*(fall|winter|summer|spring)\s*\d{4}.*$/gi;
+
+function squash(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Dedup key = normalized company|title|city. Location keeps only the first
+// comma segment so "Toronto, ON" and "Toronto, Ontario, Canada" collide.
+export function dedupKey(job) {
+  const company = squash(String(job.company || '').replace(COMPANY_NOISE, ''));
+  const title = squash(String(job.title || '').replace(TITLE_NOISE, ''));
+  const city = squash(String(job.location || '').split(',')[0]);
+  return `${company}|${title}|${city}`;
+}
+
+export function jobId(job) {
+  return createHash('sha1').update(dedupKey(job)).digest('hex').slice(0, 20);
+}
+
+// Merge a freshly scraped job onto an existing one: keep the longer
+// description, union the sources, prefer a known posted date.
+export function mergeJob(existing, incoming) {
+  const src = { name: incoming.source, url: incoming.url, applyUrl: incoming.applyUrl || incoming.url };
+  if (!existing) {
+    const { source, url, applyUrl, externalId, ...rest } = incoming;
+    return { ...rest, sources: [src], externalIds: externalId ? { [source]: externalId } : {} };
+  }
+  const out = { ...existing };
+  if (!out.sources.some((s) => s.name === src.name)) out.sources = [...out.sources, src];
+  if (incoming.externalId) out.externalIds = { ...(out.externalIds || {}), [incoming.source]: incoming.externalId };
+  if ((incoming.description || '').length > (out.description || '').length) out.description = incoming.description;
+  if (!out.salary && incoming.salary) out.salary = incoming.salary;
+  if (!out.postedAt && incoming.postedAt) out.postedAt = incoming.postedAt;
+  if ((!out.workMode || out.workMode === 'unknown') && incoming.workMode) out.workMode = incoming.workMode;
+  if (!out.employmentType && incoming.employmentType) out.employmentType = incoming.employmentType;
+  return out;
+}
+
+// Turns preferences into search queries. Slash alternatives become separate
+// titles ("Social Media / Content Marketing Intern" -> two queries).
+export function buildQueries(profile) {
+  const prefs = profile.preferences || {};
+  const titles = new Set();
+  for (const raw of prefs.titles || []) {
+    const t = String(raw).trim();
+    if (!t) continue;
+    const m = t.match(/^(.*?)\s\/\s(.*?)\s(\S+(?:\s\S+)?)$/); // "A / B Rest"
+    if (m) {
+      titles.add(`${m[1]} ${m[3]}`.replace(/\s+/g, ' ').trim());
+      titles.add(`${m[2]} ${m[3]}`.replace(/\s+/g, ' ').trim());
+    } else {
+      titles.add(t);
+    }
+  }
+  if (titles.size === 0 && profile.experience && profile.experience[0]) titles.add(profile.experience[0].title);
+  const location = searchLocation(prefs.locations || [], profile.personal && profile.personal.location);
+  return { titles: [...titles].slice(0, 12), location };
+}
+
+export function searchLocation(locations, fallback) {
+  const first = (locations || []).map((l) => String(l).trim()).find(Boolean);
+  const raw = first || fallback || '';
+  if (/greater toronto|gta/i.test(raw)) return 'Toronto, ON';
+  return raw.replace(/,\s*Ontario\b/i, ', ON') || 'Canada';
+}
+
+const SENIOR = /\b(senior|sr\.?|lead|principal|director|head of|manager|vp|chief|staff)\b/i;
+const STOP = new Set(['and', 'or', 'the', 'of', 'intern', 'internship', 'co', 'op', 'coop', 'a', 'an', 'in', 'for']);
+
+function tokens(s) {
+  return squash(s).split(' ').filter((w) => w && !STOP.has(w));
+}
+
+// Deterministic 0-100 heuristic. Title fit 40, employment type 15, location 15,
+// recency 15, skills 15, minus a seniority penalty for intern/junior profiles.
+export function heuristicScore(job, profile, now = new Date()) {
+  const prefs = profile.preferences || {};
+  const title = squash(job.title);
+  const titleToks = new Set(tokens(job.title));
+
+  let titleFit = 0;
+  for (const pref of prefs.titles || []) {
+    for (const variant of pref.split(/\s\/\s/)) {
+      const pt = tokens(variant);
+      if (!pt.length) continue;
+      const hit = pt.filter((w) => titleToks.has(w)).length / pt.length;
+      titleFit = Math.max(titleFit, hit);
+    }
+  }
+  let score = Math.round(titleFit * 40);
+
+  const wantsIntern = (prefs.employmentType || []).some((t) => /intern|co-?op/i.test(t)) || /intern|co-?op|junior/i.test(prefs.seniority || '');
+  const jobIsIntern = /\bintern|co-?op\b/i.test(`${job.title} ${job.employmentType || ''}`);
+  const typeMatch = (prefs.employmentType || []).some((t) => squash(t).split(' ')[0] === squash(job.employmentType || '').split(' ')[0]);
+  if (typeMatch || (wantsIntern && jobIsIntern)) score += 15;
+  else if (!job.employmentType) score += 5;
+
+  const loc = squash(job.location);
+  const cities = (prefs.locations || []).map((l) => squash(l.split(',')[0])).filter(Boolean);
+  if (job.workMode === 'remote' && prefs.remote !== 'onsite') score += 15;
+  else if (cities.some((c) => c && loc.includes(c)) || /toronto/.test(loc) && cities.some((c) => /toronto/.test(c))) score += 15;
+  else if (/ontario|\bon\b/.test(loc) && cities.length) score += 7;
+  else if (!loc) score += 3;
+
+  const posted = job.postedAt instanceof Date ? job.postedAt : job.postedAt && job.postedAt.toDate ? job.postedAt.toDate() : null;
+  if (posted) {
+    const days = (now - posted) / 86400e3;
+    score += days <= 3 ? 15 : days <= 7 ? 12 : days <= 14 ? 8 : days <= 30 ? 4 : 0;
+  } else score += 5;
+
+  const text = squash(`${job.title} ${job.description || ''}`);
+  const skillTerms = Object.values(profile.skills || {}).flat().map((s) => squash(String(s).split(/[(/&,]/)[0])).filter((s) => s.length > 3);
+  const hits = new Set(skillTerms.filter((s) => text.includes(s))).size;
+  score += Math.min(15, hits * 3);
+
+  if (wantsIntern && SENIOR.test(job.title) && !jobIsIntern) score -= 25;
+  if (/\bintern/i.test(title) === false && wantsIntern && /\b(5|6|7|8|9|10)\+?\s*years/.test(text)) score -= 10;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+export function finalScore(heuristic, matchPct) {
+  if (typeof matchPct !== 'number') return heuristic;
+  return Math.round(0.35 * heuristic + 0.65 * matchPct);
+}
+
+function profileSummary(profile) {
+  const p = profile;
+  return {
+    education: (p.education || []).map((e) => `${e.degree || ''} ${e.field || ''} ${e.institution || ''} ${e.graduation || e.end || ''}`.trim()),
+    experience: (p.experience || []).map((e) => ({
+      title: e.title,
+      company: e.company,
+      dates: `${e.start || ''} to ${e.end || ''}`,
+      bullets: [...(e.responsibilities || []), ...(e.achievements || [])].slice(0, 6),
+    })),
+    projects: (p.projects || []).map((x) => `${x.name || ''}: ${x.description || ''}`.slice(0, 300)),
+    skills: p.skills || {},
+    preferences: p.preferences || {},
+    workAuthorization: p.workAuthorization || '',
+    availability: p.availability || '',
+  };
+}
+
+const ANALYSIS_SHAPE = `{"results": [{"id": "<job id exactly as given>", "matchPct": <integer 0-100>,
+"strong": ["<up to 5 requirements the candidate clearly meets, cite the profile fact>"],
+"missing": ["<up to 5 requirements the profile does not show>"],
+"advantages": ["<up to 3 things that make this candidate stand out for this job>"],
+"concerns": ["<up to 3 concerns: seniority, location, work authorization, pay, fit>"],
+"recommendation": "<one of: apply | maybe | skip>"}]}`;
+
+// LLM analysis for up to 10 jobs in one call. Returns a map id -> analysis.
+export async function analyzeBatch(jobs, profile) {
+  const summary = profileSummary(profile);
+  const jobBlock = jobs
+    .map(
+      (j, i) =>
+        `--- JOB ${i + 1} (id: ${j.id}) ---\nTitle: ${j.title}\nCompany: ${j.company}\nLocation: ${j.location} (${j.workMode})\n` +
+        `Type: ${j.employmentType || 'unknown'}\nSalary: ${j.salary || 'not listed'}\nDescription:\n${(j.description || 'No description available; judge from the title only.').slice(0, 2500)}`,
+    )
+    .join('\n\n');
+  const prompt =
+    `You are ranking job postings for a candidate. Score each job for how well the CANDIDATE fits the JOB and how well the job fits the candidate's stated preferences. ` +
+    `matchPct: 85+ only when the candidate meets nearly every requirement and the role matches their preferred titles and level; 60-84 solid partial fit; below 40 when the level, field, or authorization is wrong. ` +
+    `Return one result per job, ids exactly as given.\n\nCANDIDATE PROFILE:\n${JSON.stringify(summary)}\n\nJOBS:\n${jobBlock}`;
+  const out = await ask(prompt, ANALYSIS_SHAPE);
+  const map = {};
+  for (const r of (out && out.results) || []) {
+    if (!r || !r.id) continue;
+    const pct = Number(r.matchPct);
+    map[r.id] = {
+      matchPct: Number.isFinite(pct) ? Math.max(0, Math.min(100, Math.round(pct))) : null,
+      strong: arr(r.strong),
+      missing: arr(r.missing),
+      advantages: arr(r.advantages),
+      concerns: arr(r.concerns),
+      recommendation: ['apply', 'maybe', 'skip'].includes(r.recommendation) ? r.recommendation : 'maybe',
+    };
+  }
+  return map;
+}
+
+const arr = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean).slice(0, 6) : []);
