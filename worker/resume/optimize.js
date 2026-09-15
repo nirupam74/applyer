@@ -103,8 +103,10 @@ export function detectProblems({ profile, originalText, structured }) {
 
 const ATS_SHAPE = `{"score": number 0-100, "problems": string[], "recommendations": string[], "improvementsMade": string[], "remainingWeaknesses": string[]}`;
 
-// optimizeResume({ profile, originalText, existingStructured, section }) -> { structured, ats }
-export async function optimizeResume({ profile, originalText, existingStructured, section }) {
+// optimizeResume({ profile, originalText, existingStructured, section, job }) -> { structured, ats }
+// job (optional): { title, company, description } - when given, the summary and experience
+// bullets are reordered/reworded to target that job, using only facts already in the profile.
+export async function optimizeResume({ profile, originalText, existingStructured, section, job }) {
   if (section && !SECTIONS.includes(section)) {
     throw new Error(`Unknown section: ${section}`);
   }
@@ -113,6 +115,10 @@ export async function optimizeResume({ profile, originalText, existingStructured
   const detectedBlock = problems.length
     ? `Detected problems (fold these, worded naturally, into ats.problems):\n${problems.map((p) => `- ${p}`).join('\n')}`
     : 'No deterministic problems were detected.';
+
+  const jobBlock = job && (job.title || job.company || job.description)
+    ? `TARGET JOB (reorder and reword the summary and experience bullets to best target this job, using only facts already present in the profile; never invent anything):\nTitle: ${job.title || ''}\nCompany: ${job.company || ''}\nDescription:\n${job.description || ''}`
+    : '';
 
   const base = existingStructured ? normalizeStructured(existingStructured) : emptyStructured();
 
@@ -124,7 +130,8 @@ export async function optimizeResume({ profile, originalText, existingStructured
       `Original resume text:\n${originalText || ''}`,
       `Existing structured resume for context:\n${JSON.stringify(base)}`,
       detectedBlock,
-    ].join('\n\n');
+      jobBlock,
+    ].filter(Boolean).join('\n\n');
     const out = await ask(prompt, shape);
     const structured = { ...base, [section]: normalizeSection(section, out[section]) };
     const ats = normalizeAts(out.ats, problems);
@@ -137,7 +144,8 @@ export async function optimizeResume({ profile, originalText, existingStructured
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Original resume text:\n${originalText || ''}`,
     detectedBlock,
-  ].join('\n\n');
+    jobBlock,
+  ].filter(Boolean).join('\n\n');
   const out = await ask(prompt, shape);
   const structured = normalizeStructured(out.structured);
   const ats = normalizeAts(out.ats, problems);
