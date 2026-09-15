@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Usage: node scripts/create-users.mjs a@x.com b@y.com
+// Usage: node scripts/create-users.mjs a@x.com[:password] b@y.com[:password]
 // Creates each Auth user with a generated password, seeds users/{uid} and
 // users/{uid}/profile/profile. Idempotent: an existing user prints "exists".
 import admin from 'firebase-admin';
@@ -16,7 +16,7 @@ function generatePassword() {
 }
 
 async function main() {
-  const emails = process.argv.slice(2);
+  const emails = process.argv.slice(2); // each arg: email or email:password
   if (!emails.length) {
     console.error('Usage: node scripts/create-users.mjs a@x.com b@y.com');
     process.exit(1);
@@ -28,14 +28,15 @@ async function main() {
   const auth = admin.auth();
   const db = admin.firestore();
 
-  for (const email of emails) {
+  for (const arg of emails) {
+    const [email, givenPassword] = arg.split(":");
     let userRecord;
     let isNew = false;
     try {
       userRecord = await auth.getUserByEmail(email);
     } catch (err) {
       if (err.code !== 'auth/user-not-found') throw err;
-      const password = generatePassword();
+      const password = givenPassword || generatePassword();
       userRecord = await auth.createUser({ email, password });
       isNew = true;
       console.log(`${email}  ${password}`);
