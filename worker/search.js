@@ -21,6 +21,7 @@ export async function searchJobs({ db, uid, log }, payload) {
 
   // 1. Scrape. Each source gets a run doc with status ok | blocked | error.
   const found = new Map(); // jobId -> merged job
+  const jobs = new Map(); // jobId -> job after merging with stored docs
   const runs = {};
   const context = await openBrowser();
   try {
@@ -62,7 +63,6 @@ export async function searchJobs({ db, uid, log }, payload) {
     // 2. Merge with what is already stored so saved/dismissed/analysis survive.
     const existingSnap = await userRef.collection('jobs').get();
     const existing = new Map(existingSnap.docs.map((d) => [d.id, d.data()]));
-    const jobs = new Map();
     for (const [id, fresh] of found) {
       const prev = existing.get(id);
       const merged = prev ? mergeFresh(prev, fresh) : { ...fresh, status: 'new', matchPct: null, analysis: null, discoveredAt: new Date() };
@@ -79,6 +79,7 @@ export async function searchJobs({ db, uid, log }, payload) {
     await log(`fetching descriptions for ${needDetails.length} listings`);
     let fetched = 0;
     for (const job of needDetails) {
+      if (job.detailsBlocked) continue;
       const [name, externalId] = Object.entries(job.externalIds)[0];
       const adapter = sources[name];
       if (!adapter || !adapter.details) continue;
