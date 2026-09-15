@@ -23,8 +23,9 @@ const SOFFICE_CANDIDATES = [
 ].filter(Boolean);
 const SOFFICE = SOFFICE_CANDIDATES.find((p) => existsSync(p)) || SOFFICE_CANDIDATES[SOFFICE_CANDIDATES.length - 1];
 const PDFINFO = process.env.APPLYER_PDFINFO || '/opt/homebrew/bin/pdfinfo';
+const PDFTOTEXT = process.env.APPLYER_PDFTOTEXT || '/opt/homebrew/bin/pdftotext';
 
-// docxToPdf(docxBuffer) -> { pdf: Buffer, pages: number }
+// docxToPdf(docxBuffer) -> { pdf: Buffer, pages: number, linesPerPage: number[] }
 // Renders through LibreOffice headless so the page count is the real paginated count.
 export async function docxToPdf(docxBuffer) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'applyer-pdf-'));
@@ -43,7 +44,9 @@ export async function docxToPdf(docxBuffer) {
     const pdf = await fs.readFile(path.join(dir, 'resume.pdf'));
     const { stdout } = await run(PDFINFO, [path.join(dir, 'resume.pdf')]);
     const m = /Pages:\s+(\d+)/.exec(stdout);
-    return { pdf, pages: m ? Number(m[1]) : 0 };
+    const text = (await run(PDFTOTEXT, ['-layout', path.join(dir, 'resume.pdf'), '-'])).stdout;
+    const linesPerPage = text.split('\f').map((pg) => pg.split('\n').filter((l) => l.trim()).length).filter((n, i, arr) => n > 0 || i < arr.length - 1);
+    return { pdf, pages: m ? Number(m[1]) : 0, linesPerPage };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

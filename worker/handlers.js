@@ -147,21 +147,67 @@ async function fitToPages({ structured, profile, pageLimit, log }) {
   const opts = { availability: profile.availability || '' };
   let current = structured;
   let best = null;
-  for (let round = 0; round < 3; round++) {
+  let last = null;
+  for (let round = 0; round < 4; round++) {
     for (let level = 0; level < FIT_LEVELS.length; level++) {
       await log(`building DOCX (round ${round + 1}, layout level ${level + 1})`);
       const docx = await buildDocx(current, personal, { ...opts, level });
-      const { pdf, pages } = await docxToPdf(docx);
+      const { pdf, pages, linesPerPage } = await docxToPdf(docx);
       await log(`rendered ${pages} page(s), limit ${pageLimit}`);
-      const attempt = { docx, pdf, pages, structured: current, level, round };
+      const attempt = { docx, pdf, pages, linesPerPage, structured: current, level, round };
+      last = attempt;
       if (!best || pages < best.pages) best = attempt;
-      if (pages <= pageLimit) return attempt;
+      if (pages <= pageLimit) return round === 0 ? attempt : refill({ attempt, structured, profile, pageLimit, log, opts, personal });
     }
-    if (round < 2) {
-      await log('still too long, condensing content with the LLM');
-      current = await condenseStructured({ structured: current, profile, pages: best.pages, targetPages: pageLimit });
+    if (round < 3) {
+      const lines = last.linesPerPage || [];
+      const overflowLines = lines.slice(pageLimit).reduce((a, b) => a + b, 0);
+      const totalLines = lines.reduce((a, b) => a + b, 0);
+      await log(`still too long by ${overflowLines} lines, condensing content with the LLM`);
+      current = await condenseStructured({ structured: current, profile, pages: last.pages, targetPages: pageLimit, overflowLines, totalLines });
     }
   }
   await log(`could not fit within ${pageLimit} page(s); keeping the shortest version (${best.pages} pages)`);
+  return best;
+}
+
+// refill: after LLM condensing, put profile items back one at a time (coursework, then skills)
+// and re-render after each, stopping right before the page limit is exceeded. Deterministic,
+// about one second per item, so the page ends up full instead of sparse.
+async function refill({ attempt, structured: original, profile, pageLimit, log, opts, personal }) {
+  const current = JSON.parse(JSON.stringify(attempt.structured));
+  const candidates = [];
+  (original.education || []).forEach((ed, i) => {
+    const have = new Set((current.education[i]?.coursework) || []);
+    for (const c of ed.coursework || []) if (!have.has(c)) candidates.push({ kind: 'course', i, value: c });
+  });
+  const skills = original.skills || {};
+  for (const cat of Object.keys(skills)) {
+    const have = new Set(current.skills?.[cat] || []);
+    for (const s of skills[cat] || []) if (!have.has(s)) candidates.push({ kind: 'skill', cat, value: s });
+  }
+  if (!candidates.length) return attempt;
+  await log(`page has room, refilling from ${candidates.length} profile items`);
+  let best = attempt;
+  let added = 0;
+  for (const c of candidates.slice(0, 40)) {
+    const trial = JSON.parse(JSON.stringify(best.structured));
+    if (c.kind === 'course') {
+      if (!trial.education[c.i]) continue;
+      trial.education[c.i].coursework = [...(trial.education[c.i].coursework || []), c.value];
+    } else {
+      trial.skills = trial.skills || {};
+      trial.skills[c.cat] = [...(trial.skills[c.cat] || []), c.value];
+    }
+    const docx = await buildDocx(trial, personal, { ...opts, level: best.level });
+    const { pdf, pages, linesPerPage } = await docxToPdf(docx);
+    if (pages > pageLimit) {
+      if (c.kind === 'course') continue; // a long course name may not fit where a short skill still does
+      break;
+    }
+    best = { ...best, docx, pdf, pages, linesPerPage, structured: trial };
+    added++;
+  }
+  await log(`refilled ${added} item(s); ${best.pages} page(s)`);
   return best;
 }

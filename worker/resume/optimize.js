@@ -146,10 +146,12 @@ export async function optimizeResume({ profile, originalText, existingStructured
 
 // condenseStructured({ structured, profile, pages, targetPages }) -> structured
 // Asks the LLM to shorten the resume so it fits targetPages, keeping every role and every fact.
-export async function condenseStructured({ structured, profile, pages, targetPages }) {
+export async function condenseStructured({ structured, profile, pages, targetPages, overflowLines = 0, totalLines = 0 }) {
   const shape = `{"structured": ${STRUCTURED_SHAPE}}`;
+  const target = overflowLines + 2;
+  const pct = totalLines ? Math.round((target / totalLines) * 100) : 15;
   const prompt = [
-    `This resume renders to ${pages} page(s) but must fit on ${targetPages} page(s). Condense it: tighten every bullet to one line where possible, merge overlapping bullets, cap each role at 3-4 bullets (keep the strongest, metric-bearing ones), shorten the summary to 40-60 words, keep at most 8 coursework items, and trim skills to the strongest 5-7 per category, keeping at most 5 skill categories (fold the rest into the closest kept category, leaving the others as empty arrays). Keep every role, project, degree, date, and number. Do not add anything.`,
+    `This resume renders to ${pages} page(s) at the tightest layout but must fit on ${targetPages} page(s). It is ${overflowLines} lines too long (each line is about 110 characters). Remove roughly ${target} lines of text in total, about ${pct} percent, and no more than that: the final page should be full, not sparse. Order of cuts: first shorten the wordiest bullets and the summary, then merge bullets that repeat each other, then trim the longest skill lines and the coursework list (never below 8 coursework items), and only as a last resort drop a whole bullet (never a role, project, or degree). Keep every skill category that has entries. Keep every date and number.`,
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Current structured resume:\n${JSON.stringify(structured)}`,
   ].join('\n\n');
