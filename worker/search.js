@@ -75,7 +75,7 @@ export async function searchJobs({ db, uid, log }, payload) {
     for (const job of jobs.values()) job.heuristic = heuristicScore(job, profile);
     const ordered = [...jobs.values()].sort((a, b) => b.heuristic - a.heuristic);
     const detailLimit = payload.detailLimit || 120;
-    const needDetails = ordered.filter((j) => !j.description && j.externalIds && !j.detailsBlocked).slice(0, detailLimit);
+    const needDetails = ordered.slice(0, detailLimit).filter((j) => !j.description && j.externalIds && !j.detailsBlocked);
     await log(`fetching descriptions for ${needDetails.length} listings`);
     let fetched = 0;
     for (const job of needDetails) {
@@ -113,7 +113,7 @@ export async function searchJobs({ db, uid, log }, payload) {
   // 4. LLM analysis in batches of 10 for the top candidates without one.
   const analyzeLimit = payload.analyzeLimit || 120;
   const ranked = [...jobs.values()].sort((a, b) => b.heuristic - a.heuristic);
-  const toAnalyze = ranked.filter((j) => !j.analysis).slice(0, analyzeLimit);
+  const toAnalyze = ranked.slice(0, analyzeLimit).filter((j) => !j.analysis);
   await log(`analyzing ${toAnalyze.length} listings with the LLM in batches of 10`);
   for (let i = 0; i < toAnalyze.length; i += 10) {
     const batch = toAnalyze.slice(i, i + 10);
