@@ -1,0 +1,16 @@
+{
+  "name": "applyer-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Applyer worker: parses resumes, calls claude -p, generates DOCX, writes to Firestore.",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "docx": "^9.1.1",
+    "firebase-admin": "^12.7.0",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1"
+  }
+}
