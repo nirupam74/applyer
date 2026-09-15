@@ -65,7 +65,20 @@ function overlaps(a, b) {
   if (!A.size || !B.size) return false;
   let shared = 0;
   for (const w of A) if (B.has(w)) shared++;
-  return shared / Math.min(A.size, B.size) >= 0.5;
+  const ratio = shared / Math.min(A.size, B.size);
+  const sameOpening = [...A][0] === [...B][0];
+  return ratio >= 0.5 || (sameOpening && ratio >= 0.35);
+}
+
+// Drop skill entries that repeat an earlier entry's first 20 normalized characters (e.g. two "AI-assisted development (...)" variants).
+function dedupeSkills(list) {
+  const seen = new Set();
+  return list.filter((s) => {
+    const k = s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 function dateRange(start, end) {
@@ -110,8 +123,14 @@ export function buildDocx(structured, personal = {}, opts = {}) {
     children.push(heading('Relevant experience', L));
     for (const e of structured.experience) {
       children.push(entryLine(e.title, e.company, dateRange(e.start, e.end), L));
-      const resp = e.responsibilities || [];
-      const extra = (e.achievements || []).filter((a) => !resp.some((r) => overlaps(r, a)));
+      // Merge achievements into responsibilities: an overlapping pair keeps the metric-bearing (or longer) text once.
+      const resp = [...(e.responsibilities || [])];
+      const extra = [];
+      for (const a of e.achievements || []) {
+        const i = resp.findIndex((r) => overlaps(r, a));
+        if (i === -1) extra.push(a);
+        else if (/\d/.test(a) && (!/\d/.test(resp[i]) || a.length > resp[i].length)) resp[i] = a;
+      }
       for (const b of [...resp, ...extra]) children.push(bullet(b, L));
     }
   }
@@ -140,7 +159,7 @@ export function buildDocx(structured, personal = {}, opts = {}) {
   const skills = structured.skills || {};
   const skillLines = Object.entries(SKILL_LABELS)
     .filter(([k]) => skills[k]?.length)
-    .map(([k, label]) => `${label}: ${skills[k].join('  |  ')}`);
+    .map(([k, label]) => `${label}: ${dedupeSkills(skills[k]).join('  |  ')}`);
   if (skillLines.length) {
     children.push(heading('Skills', L));
     for (const line of skillLines) children.push(bullet(line, L));
