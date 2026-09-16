@@ -73,8 +73,25 @@ async function detectPauseRaw(page) {
 
 // Best-effort human label for a form control, ported from apply.py's label_for: aria-labelledby,
 // label[for], aria-label/placeholder/name, then the nearest ancestor's text.
+
+// Serialized into page.evaluate: finds the question text that owns a form control by walking
+// up the ancestors and taking the first label-like element that does not contain the control.
+const QUESTION_TEXT_SRC = `(node) => {
+  const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const looksLikeId = (t) => !t || t.length < 3 || t.length > 400 || /\\[|^[0-9a-f-]{16,}$|^field\\d*$/i.test(t);
+  let anc = node.parentElement;
+  for (let i = 0; i < 6 && anc && anc !== document.body; i++, anc = anc.parentElement) {
+    for (const q of anc.querySelectorAll('legend, .application-label, [class*="question" i], [class*="label" i]:not(label), [class*="title" i], h1, h2, h3, h4, h5, h6, label')) {
+      if (q.contains(node) || q.querySelector('input,select,textarea')) continue;
+      const t = norm(q.innerText);
+      if (!looksLikeId(t)) return t.slice(0, 200);
+    }
+  }
+  return '';
+}`;
+
 async function labelFor(el) {
-  return el.evaluate((node) => {
+  return el.evaluate((node, QT) => {
     const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
     const labelledby = node.getAttribute('aria-labelledby');
     if (labelledby) {
@@ -88,13 +105,16 @@ async function labelFor(el) {
     }
     const parentLabel = node.closest('label');
     if (parentLabel) { const t = norm(parentLabel.innerText); if (t) return t; }
-    for (const attr of ['aria-label', 'placeholder', 'name']) {
+    for (const attr of ['aria-label', 'placeholder']) {
       const v = node.getAttribute(attr);
       if (v && v.length > 1) return norm(v);
     }
-    const p = node.closest('div,li,section,fieldset');
-    return p ? norm(p.innerText).slice(0, 120) : '';
-  }).catch(() => '');
+    const q = (new Function('return ' + QT)())(node);
+    if (q) return q;
+    const nm = node.getAttribute('name') || '';
+    if (nm.length > 1 && !/\[|^[0-9a-f-]{16,}$/.test(nm)) return norm(nm);
+    return ''; // unknown question: better a red gap than a guessed answer
+  }, QUESTION_TEXT_SRC).catch(() => '');
 }
 
 async function isRequired(el) {
@@ -125,12 +145,42 @@ async function fillTextInputs(root, ctx, out) {
     if (!label) continue;
     const { value, confidence } = await getAnswer(ctx, label);
     if (value) {
-      await el.fill(value).catch(() => {});
+      if (value.length <= 80) { await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(value, { delay: 15 }).catch(() => el.fill(value).catch(() => {})); }
+      else await el.fill(value).catch(() => {});
+      el._lastTyped = value;
+      await pickSuggestion(el);
       out.push({ name: label, value, confidence });
     } else if (await isRequired(el)) {
       out.push({ name: label, value: '', confidence: 'red' });
       ctx._requiredGap = true;
     }
+  }
+}
+
+// Autocomplete inputs (Lever location, Greenhouse school, Workday typeahead) only validate
+// once a suggestion is chosen; pick the first one that appears after typing.
+async function pickSuggestion(el) {
+  try {
+    const frame = await el.ownerFrame();
+    if (!frame) return;
+    await new Promise((r) => setTimeout(r, 1500));
+    const sel = '.dropdown-results > *, [role="listbox"] [role="option"], ul[class*="suggest" i] li, [class*="autocomplete" i] [class*="item" i], [class*="typeahead" i] li, .pac-item';
+    let opt = frame.locator(sel).filter({ visible: true }).first();
+    if (!(await opt.count().catch(() => 0))) {
+      // Lookup services sometimes answer "no results" under load; retype once after a pause.
+      const typed = await el.inputValue().catch(() => '');
+      const noResults = await frame.locator('text=/no (location|results?) found/i').filter({ visible: true }).count().catch(() => 0);
+      if (!typed && !noResults) return;
+      await new Promise((r) => setTimeout(r, 6000));
+      await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(typed || el._lastTyped || '', { delay: 40 }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 2500));
+      opt = frame.locator(sel).filter({ visible: true }).first();
+      if (!(await opt.count().catch(() => 0))) return;
+    }
+    await opt.click({ timeout: 3000 }); // a real pointer click: some widgets ignore synthetic clicks
+    await new Promise((r) => setTimeout(r, 600));
+  } catch {
+    // no suggestion list: plain text input
   }
 }
 
@@ -181,17 +231,15 @@ async function fillReactSelects(page, root, ctx, out) {
 }
 
 async function radioGroupLabel(el) {
-  return el.evaluate((node) => {
+  return el.evaluate((node, QT) => {
     const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
     const fs = node.closest('fieldset');
     if (fs) { const leg = fs.querySelector('legend'); if (leg) return norm(leg.innerText); }
-    const group = node.closest('[role="radiogroup"]') || node.closest('div,li,section');
-    if (group) {
-      const cand = group.querySelector('legend, [class*="label" i]');
-      if (cand) return norm(cand.innerText).slice(0, 120);
-    }
-    return node.getAttribute('name') || '';
-  }).catch(() => '');
+    const q = (new Function('return ' + QT)())(node);
+    if (q) return q.slice(0, 200);
+    const nm = node.getAttribute('name') || '';
+    return /\[|^[0-9a-f-]{16,}$/.test(nm) ? '' : nm;
+  }, QUESTION_TEXT_SRC).catch(() => '');
 }
 
 async function radioOwnLabel(el) {
@@ -226,7 +274,10 @@ async function fillRadioGroups(root, ctx, out) {
     if (!question) continue;
     const optionLabels = [];
     for (const e of els) optionLabels.push(await radioOwnLabel(e));
-    const { value, confidence } = await getAnswer(ctx, question, optionLabels);
+    let { value, confidence } = await getAnswer(ctx, question, optionLabels);
+    if (!value && ACK_RE.test(question)) { // "I am aware that..." Yes/No: acknowledge, flag yellow
+      value = optionLabels.find((l) => /^yes\b/i.test(l)) || null; confidence = 'yellow';
+    }
     if (!value) {
       if (await isRequired(els[0])) { out.push({ name: question, value: '', confidence: 'red' }); ctx._requiredGap = true; }
       continue;
@@ -239,14 +290,35 @@ async function fillRadioGroups(root, ctx, out) {
   }
 }
 
-const SKIP_CHECKBOX_RE = /terms|privacy|consent|agree|policy/i;
+const SKIP_CHECKBOX_RE = /terms|privacy|consent|agree|policy|acknowledge|i am aware|i understand|i confirm|i certify|i accept/i;
+const ACK_RE = /i am aware|acknowledge|i understand|i confirm|i certify/i;
 
 async function fillCheckboxes(root, ctx, out) {
-  for (const el of await root.$$('input[type=checkbox]')) {
+  const all = await root.$$('input[type=checkbox]');
+  const byName = new Map();
+  for (const el of all) { const n = await el.evaluate((x) => x.name || '').catch(() => ''); if (n) byName.set(n, (byName.get(n) || 0) + 1); }
+  const groupsDone = new Set();
+  for (const el of all) {
     if (!(await isUsable(el))) continue;
+    const name = await el.evaluate((x) => x.name || '').catch(() => '');
+    if (name && byName.get(name) > 1) { // several boxes under one question: choose one, like a radio group
+      if (groupsDone.has(name)) continue;
+      groupsDone.add(name);
+      const els = []; for (const e of all) if ((await e.evaluate((x) => x.name || '').catch(() => '')) === name) els.push(e);
+      if ((await Promise.all(els.map((e) => e.isChecked().catch(() => false)))).some(Boolean)) continue;
+      const question = await radioGroupLabel(els[0]);
+      const optionLabels = []; for (const e of els) optionLabels.push(await radioOwnLabel(e));
+      const { value, confidence } = await getAnswer(ctx, question || name, optionLabels);
+      const idx = optionLabels.findIndex((l) => l === value);
+      if (idx >= 0) { await els[idx].check().catch(() => {}); out.push({ name: question || name, value, confidence }); }
+      else if (await isRequired(els[0])) { out.push({ name: question || name, value: '', confidence: 'red' }); ctx._requiredGap = true; }
+      continue;
+    }
     if (await el.isChecked().catch(() => false)) continue;
-    const label = await labelFor(el);
-    if (!label) continue;
+    const own = await labelFor(el);
+    if (!own) continue;
+    const question = await radioGroupLabel(el);
+    const label = question && question !== own && !own.includes(question) ? `${question} -> ${own}` : own;
     if (SKIP_CHECKBOX_RE.test(label)) { // consent/terms: the user chose fully autonomous submission
       await el.check().catch(() => {});
       out.push({ name: label, value: 'Yes', confidence: 'yellow' });
@@ -286,6 +358,48 @@ async function fillGenericForm(page, root, ctx, docs) {
   await fillCheckboxes(root, ctx, out);
   if (docs) await uploadFiles(root, docs, out);
   return out;
+}
+
+// Locates a visible button without clicking it.
+async function findByText(root, texts) {
+  for (const t of texts) {
+    const btn = root.locator(`button:has-text("${t}"), input[type=submit][value*="${t}" i], a:has-text("${t}")`).first();
+    if ((await btn.count().catch(() => 0)) && (await btn.isVisible().catch(() => false))) return btn;
+  }
+  return null;
+}
+
+// Required controls the browser itself would refuse to submit, with their question text.
+async function invalidRequired(page) {
+  return page.evaluate((QT) => {
+    const qt = new Function('return ' + QT)();
+    const out = [];
+    for (const el of document.querySelectorAll('input, select, textarea')) {
+      if (!el.required || el.disabled) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0 && el.type !== 'file') continue;
+      if (typeof el.checkValidity === 'function' && el.checkValidity()) continue;
+      const label = document.querySelector(`label[for="${CSS.escape(el.id || '')}"]`);
+      out.push((label && label.innerText.trim()) || qt(el) || el.name || el.type);
+    }
+    return [...new Set(out)];
+  }, QUESTION_TEXT_SRC).catch(() => []);
+}
+
+// Presses submit and returns { ok, confirmation }. Success means a confirmation message,
+// or the form is gone and nothing is invalid, or the URL moved on with no form left.
+async function submitAndVerify(page, btn) {
+  const before = { url: page.url(), inputs: await page.locator('form input, form textarea, form select').count().catch(() => 0) };
+  await btn.click().catch(() => {});
+  await page.waitForTimeout(3000);
+  const confirmation = await captureConfirmation(page);
+  if (confirmation) return { ok: true, confirmation };
+  const invalid = await invalidRequired(page);
+  const inputs = await page.locator('form input, form textarea, form select').count().catch(() => 0);
+  const urlChanged = page.url() !== before.url;
+  if (invalid.length) return { ok: false, confirmation: null, reason: `submit rejected, required field(s) still empty: ${invalid.slice(0, 4).join(' | ')}` };
+  if (inputs === 0 || (urlChanged && inputs < before.inputs / 2)) return { ok: true, confirmation: null };
+  return { ok: false, confirmation: null, reason: 'submit did not go through (form still on screen, no confirmation)' };
 }
 
 async function clickByText(page, root, texts) {
@@ -441,14 +555,20 @@ async function handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields) {
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
 
-    const submitTxt = await clickByText(page, root, ['Submit application', 'Submit Application']);
-    if (submitTxt) {
+    const submitBtn = await findByText(root, ['Submit application', 'Submit Application']);
+    if (submitBtn) {
+      const invalid = await invalidRequired(page);
+      if (invalid.length) {
+        const gaps = invalid.map((name) => ({ name, value: '', confidence: 'red' }));
+        allFields.push(...gaps); await recordFields(appRef, gaps);
+        return { status: 'blocked', error: `required field(s) left empty: ${invalid.slice(0, 4).join(' | ')}` };
+      }
       if (ctx._requiredGap) return { status: 'blocked', error: 'required field(s) left empty' };
       if (!ctx.autoSubmit) return { status: 'ready', portalUrl: page.url() };
-      await page.waitForTimeout(1500);
+      const result = await submitAndVerify(page, submitBtn);
       await takeShot(page, appRef, screenshots);
-      const confirmation = await captureConfirmation(page);
-      return { status: 'submitted', confirmation, portalUrl: page.url() };
+      if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
+      return { status: 'submitted', confirmation: result.confirmation, portalUrl: page.url() };
     }
     const nextTxt = await clickByText(page, root, ['Review', 'Next']);
     if (!nextTxt) return { status: 'blocked', error: 'no Next/Review/Submit control found in Easy Apply modal' };
@@ -520,14 +640,20 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
 
-    const submitTxt = await clickByText(page, page, ['Submit Application', 'Submit application', 'Submit', 'Send Application']);
-    if (submitTxt) {
+    const submitBtn = await findByText(page, ['Submit Application', 'Submit application', 'Submit', 'Send Application']);
+    if (submitBtn) {
+      const invalid = await invalidRequired(page);
+      if (invalid.length) {
+        const gaps = invalid.map((name) => ({ name, value: '', confidence: 'red' }));
+        allFields.push(...gaps); await recordFields(appRef, gaps);
+        return { status: 'blocked', error: `required field(s) left empty: ${invalid.slice(0, 4).join(' | ')}` };
+      }
       if (ctx._requiredGap) return { status: 'blocked', error: 'required field(s) left empty' };
       if (!ctx.autoSubmit) return { status: 'ready', portalUrl: page.url() };
-      await page.waitForTimeout(1500);
+      const result = await submitAndVerify(page, submitBtn);
       await takeShot(page, appRef, screenshots);
-      const confirmation = await captureConfirmation(page);
-      return { status: 'submitted', confirmation, portalUrl: page.url() };
+      if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
+      return { status: 'submitted', confirmation: result.confirmation, portalUrl: page.url() };
     }
     const nextTxt = await clickByText(page, page, ['Next', 'Continue', 'Save and Continue', 'Save & Continue']);
     if (!nextTxt) return { status: 'blocked', error: 'no Next/Submit control found; may need manual completion', portalUrl: page.url() };
