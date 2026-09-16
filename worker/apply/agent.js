@@ -628,12 +628,31 @@ async function settle(page) {
   await page.waitForTimeout(1000);
 }
 
+// Job boards sometimes redirect an Apply click to an unrelated sponsored posting. The page
+// must name the employer or most of the title before a single field is touched.
+async function landedOnDifferentPosting(page, job) {
+  const text = (await page.evaluate(() => (document.title + ' ' + (document.body?.innerText || '').slice(0, 6000)).toLowerCase()).catch(() => '')) || '';
+  if (!text.trim()) return null; // nothing rendered yet; later checks will report no controls
+  const squash = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const companyToks = squash(job.company).split(' ').filter((w) => w.length > 2 && !/^(inc|ltd|llc|the|group|corp|company|canada)$/.test(w));
+  const titleToks = squash(job.title).split(' ').filter((w) => w.length > 2 && !/^(and|the|for|intern|internship|co|op)$/.test(w));
+  const companyHit = companyToks.length > 0 && companyToks.some((w) => text.includes(w));
+  const titleHits = titleToks.filter((w) => text.includes(w)).length;
+  if (companyHit || (titleToks.length && titleHits >= Math.ceil(titleToks.length * 0.6))) return null;
+  const h1 = (await page.locator('h1').first().innerText().catch(() => '')) || (await page.title().catch(() => ''));
+  return (h1 || 'unknown page').trim().slice(0, 120);
+}
+
 async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
+    if (step === 0) {
+      const wrong = await landedOnDifferentPosting(page, ctx.job);
+      if (wrong) return { status: 'blocked', error: `landed on a different posting: ${wrong}`, portalUrl: page.url() };
+    }
     const pause = await detectPause(page, ctx);
     if (pause) return { status: 'blocked', error: pause };
 
