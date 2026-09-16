@@ -10,8 +10,6 @@ import { readVerificationCode } from './mail.js';
 
 const FieldValue = admin.firestore.FieldValue;
 
-const CAPTCHA_HINTS = ['recaptcha', 'hcaptcha', 'captcha', "i'm not a robot", 'verify you are human'];
-const CODE_HINTS = ['verification code', 'security code', 'enter the code', 'one-time passcode', '6-digit code', '8-character', 'confirm your identity'];
 const MAX_SCREENSHOTS = 6;
 const MAX_SCREENSHOT_BYTES = 300 * 1024;
 const MAX_STEPS = 12;
@@ -47,13 +45,30 @@ async function enterVerificationCode(page, ctx) {
 }
 
 async function detectPauseRaw(page) {
-  let html = '';
-  try { html = (await page.content()).toLowerCase(); } catch { return null; }
-  const cap = CAPTCHA_HINTS.find((h) => html.includes(h));
-  if (cap) return `captcha detected (${cap})`;
-  const code = CODE_HINTS.find((h) => html.includes(h));
-  if (code) return `verification code required ('${code}')`;
-  return null;
+  // Only a VISIBLE challenge counts. Pages routinely load the reCAPTCHA script
+  // (LinkedIn does) without ever showing a challenge; an invisible v3 badge is not a wall.
+  try {
+    const found = await page.evaluate(() => {
+      const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 40 && r.height > 40 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0'; };
+      for (const f of document.querySelectorAll('iframe')) {
+        const src = f.getAttribute('src') || '';
+        if (/size=invisible/.test(src)) continue;
+        if (/recaptcha\/api2\/(anchor|bframe)|recaptcha\/enterprise\/(anchor|bframe)/.test(src) && visible(f)) return 'recaptcha';
+        if (/hcaptcha\.com/.test(src) && visible(f)) return 'hcaptcha';
+        if (/challenges\.cloudflare\.com/.test(src) && visible(f)) return 'cloudflare turnstile';
+        if (/arkoselabs|funcaptcha/.test(src) && visible(f)) return 'arkose';
+      }
+      for (const el of document.querySelectorAll('.cf-turnstile, .h-captcha, #challenge-running, #px-captcha')) if (visible(el)) return 'challenge widget';
+      const text = (document.body?.innerText || '').toLowerCase();
+      if (/verify you are human|i'm not a robot|prove you are human|press and hold/.test(text)) return 'challenge text';
+      const codeHints = ["verification code","security code","enter the code","one-time passcode","6-digit code","confirm your identity"];
+      const hit = codeHints.find((h) => text.includes(h));
+      return hit ? 'code:' + hit : null;
+    });
+    if (!found) return null;
+    if (found.startsWith('code:')) return `verification code required ('${found.slice(5)}')`;
+    return `captcha detected (${found})`;
+  } catch { return null; }
 }
 
 // Best-effort human label for a form control, ported from apply.py's label_for: aria-labelledby,
