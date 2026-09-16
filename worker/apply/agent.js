@@ -620,11 +620,20 @@ async function revealApplyForm(page) {
   return null;
 }
 
+// Waits for the network to go quiet and for at least one form control or button to be visible (up to ~20 s).
+async function settle(page) {
+  await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
+  await page.locator('input:visible, select:visible, textarea:visible, button:visible, a[href]:visible').first().waitFor({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(1000);
+}
+
 async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
   for (let step = 0; step < MAX_STEPS; step++) {
+    await settle(page); // single-page ATSs render well after load; never scan a blank shell
     const pause = await detectPause(page, ctx);
     if (pause) return { status: 'blocked', error: pause };
 
