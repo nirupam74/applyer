@@ -77,7 +77,8 @@ const RULES = [
   { re: /years? of experience/i, get: (p) => { const y = yearsOfExperience(p); return y == null ? null : String(y); } },
   { re: /start date|available to start|availability/i, get: (p) => p.availability },
   { re: /gpa/i, get: (p) => p.education?.[0]?.gpa },
-  { re: /graduation/i, get: (p) => p.education?.[0]?.graduation },
+  // The profile stores a span ("Sept 2023 - June 2028 (expected)"); a graduation question wants its end.
+  { re: /graduation/i, get: (p) => { const g = p.education?.[0]?.graduation; const m = [...String(g || '').matchAll(/([A-Za-z]{3,9})\.? (\d{4})/g)].pop(); return m ? `${m[1]} ${m[2]}` : g; } },
   { re: /degree/i, get: (p) => p.education?.[0]?.degree },
   { re: /major|field of study|discipline/i, get: (p) => p.education?.[0]?.major || p.education?.[0]?.program },
   { re: /school|university|institution|college/i, get: (p) => p.education?.[0]?.institution },
@@ -150,8 +151,10 @@ async function bankMatch(db, uid, question) {
   if (!key) return null;
   const snap = await db.collection('users').doc(uid).collection('answers').where('questionKey', '==', key).limit(1).get();
   if (snap.empty) return null;
-  const answer = snap.docs[0].data().answer;
-  return answer == null || String(answer).trim() === '' ? null : String(answer).trim();
+  const { answer, approved, source } = snap.docs[0].data();
+  if (answer == null || String(answer).trim() === '') return null;
+  // trusted: typed or approved by the user. A generated answer nobody has looked at stays yellow.
+  return { answer: String(answer).trim(), trusted: !!approved || source === 'user' };
 }
 
 // Every question the agent meets lands in the bank with the options the form offered, answered
@@ -165,7 +168,12 @@ async function recordQuestion(db, uid, question, answer, options) {
   const col = db.collection('users').doc(uid).collection('answers');
   const snap = await col.where('questionKey', '==', key).limit(1).get();
   if (!snap.empty) {
-    if (opts.length && !(snap.docs[0].data().options || []).length) await snap.docs[0].ref.update({ options: opts });
+    // The user's own or approved answers are never touched; a stale generated one may be replaced.
+    const cur = snap.docs[0].data();
+    const patch = {};
+    if (opts.length && !(cur.options || []).length) patch.options = opts;
+    if (answer && answer !== cur.answer && cur.source === 'generated' && !cur.approved) patch.answer = answer;
+    if (Object.keys(patch).length) await snap.docs[0].ref.update(patch);
     return;
   }
   await col.add({ question, questionKey: key, answer: answer || '', options: opts, tags: [], source: 'generated', approved: false, createdAt: FieldValue.serverTimestamp() });
@@ -189,16 +197,30 @@ async function llmAnswer(question, profile, job, options) {
 export async function getAnswer({ db, uid, profile, settings, job }, question, options) {
   if (!question) return { value: null, confidence: 'red' };
 
-  const bank = await bankMatch(db, uid, question);
-  if (bank) return withOptions(bank, options, 'green');
-
   const record = (answer) => recordQuestion(db, uid, question, answer, options).catch(() => {});
+
+  // A banked answer that is not one of this form's options (free text saved before the options
+  // were known) does not end the search; the rules and the LLM get to pick from the options.
+  // Order: the user's own/approved answer, then profile rules, then an unreviewed generated
+  // answer (it must not shadow a rule), then the LLM.
+  const bank = await bankMatch(db, uid, question);
+  if (bank?.trusted) {
+    const res = withOptions(bank.answer, options, 'green');
+    await record('');
+    if (res.value) return res;
+  }
 
   const rule = applyRules(profile, settings, question);
   if (rule) {
     const res = withOptions(rule, options, 'green');
     await record(res.value);
     return res;
+  }
+
+  if (bank && !bank.trusted) {
+    const res = withOptions(bank.answer, options, 'yellow');
+    await record('');
+    if (res.value) return res;
   }
 
   try {

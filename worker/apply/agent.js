@@ -787,26 +787,55 @@ async function handleParadoxChat(page, ctx, docs, appRef, screenshots, allFields
     const lastTurn = w.locator('.me-messages__inner [role=listitem]').last();
     // Two kinds of reply controls: "select one" cards inside the newest turn, and a quick-reply
     // bar (Yes / No) that sits under the transcript, outside it.
-    const choices = w.locator('[data-testid="widget_convo"]').locator(':is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible');
+    const CHOICE = ':is(button, [role=button], [role=option], [role=radio], [role=checkbox], li.el-select-dropdown__item):visible';
+    const choices = w.locator('[data-testid="widget_convo"]').locator(CHOICE);
     const texts = async (loc) => (await loc.allInnerTexts().catch(() => [])).map((t) => t.trim()).filter((t) => t && !/^(review terms|done|view)$/i.test(t));
-    const inTranscript = new Set(await texts(w.locator('.me-messages__inner :is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible')));
-    const options = [...new Set([...(await texts(lastTurn.locator(':is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible'))), ...(await texts(choices)).filter((t) => !inTranscript.has(t))])];
+    const composer = w.locator('#widget_composer_input');
+    // The bot disables the composer when it wants a choice, and the card can render a few seconds
+    // after its question. Look until choices show up or typing is allowed.
+    let options = [];
+    for (let i = 0; i < 10; i++) {
+      // A "select one" card can also be a dropdown; its items only exist on screen once it is open.
+      // The open list is a popper attached to the widget root, outside the turn and the transcript.
+      const dropdown = lastTurn.locator('.el-select input[readonly]').first();
+      const items = w.locator('li.el-select-dropdown__item:visible');
+      if ((await dropdown.isVisible().catch(() => false)) && !(await items.count().catch(() => 0))) {
+        await dropdown.click().catch(() => {});
+        await items.first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+      }
+      const inTranscript = new Set(await texts(w.locator('.me-messages__inner').locator(CHOICE)));
+      options = [...new Set([...(await texts(lastTurn.locator(CHOICE))), ...(await texts(items)), ...(await texts(choices)).filter((t) => !inTranscript.has(t))])];
+      if (options.length || !(await composer.isDisabled().catch(() => false))) break;
+      await page.waitForTimeout(1000);
+    }
+    const datePicker = lastTurn.locator('input.flatpickr-input').first();
+    const wantsDate = (await datePicker.count().catch(() => 0)) > 0;
+    if (!wantsDate && !options.length && (await composer.isDisabled().catch(() => false))) return blocked(`the assistant wants a choice this agent cannot see for: ${question.slice(0, 160)}`);
     if (/resume|r\u00e9sum\u00e9|\bcv\b/i.test(question) && (await upload.count().catch(() => 0))) {
       await upload.setInputFiles(docs.resumePath);
       field = { name: question, value: path.basename(docs.resumePath), confidence: 'green' };
     } else {
       const { value, confidence } = await getAnswer(ctx, question, options.length ? options : undefined);
-      if (!value || confidence === 'red') {
-        const gap = { name: question, value: '', confidence: 'red' };
+      // A chat reply cannot be reviewed or taken back, so only profile rules and answers the user
+      // typed or approved are sent. A guessed answer waits on the Answers page.
+      if (!value || confidence !== 'green') {
+        const gap = { name: question, value: value || '', confidence: 'red' };
         allFields.push(gap); await recordFields(appRef, [gap]);
-        return blocked(`no confident answer for the assistant's question: ${question.slice(0, 160)}`);
+        return blocked(value ? `approve the suggested answer on the Answers page, then retry: ${question.slice(0, 140)}` : `no answer for the assistant's question (add it on the Answers page): ${question.slice(0, 140)}`);
       }
-      if (options.includes(value)) {
-        await choices.getByText(value, { exact: true }).last().click();
+      if (wantsDate) {
+        // Calendar card (flatpickr): set the date through the widget, then confirm with Done.
+        const my = value.match(/^([A-Za-z]{3})[a-z]*\.? (\d{4})$/); // "June 2028", "Sept 2028"
+        const when = new Date(my ? `1 ${my[1]} ${my[2]}` : value);
+        if (Number.isNaN(when.getTime())) return blocked(`could not read "${value}" as a date for: ${question.slice(0, 120)}`);
+        await datePicker.evaluate((el, iso) => el._flatpickr.setDate(new Date(iso), true), when.toISOString());
+        await lastTurn.locator('[data-testid="select_list_btn_submit"]:not([disabled])').click({ timeout: 5000 });
+      } else if (options.includes(value)) {
+        await w.locator(CHOICE).getByText(value, { exact: true }).last().click();
         await lastTurn.locator('[data-testid="select_list_btn_submit"]:not([disabled])').click({ timeout: 3000 }).catch(() => {}); // "Please select one" cards confirm with Done
       }
       else {
-        await w.locator('#widget_composer_input').fill(value);
+        await composer.fill(value);
         await w.locator('button.send-message-btn').click();
       }
       field = { name: question, value, confidence };
