@@ -147,6 +147,9 @@ function resolveOption(value, options) {
 // "linkedin.com/in/x" and "www.site.com" (as written on a resume) fail URL validation on Phenom
 // forms ("Please enter a valid LinkedIn URL"); a full URL is accepted everywhere. Manulife's
 // form also refused https://linkedin.com/...: LinkedIn links go out in the canonical www form.
+// Workday: "Postal code must be 6 characters and in following format: A#A #A#".
+export const canadianPostal = (v) => String(v).replace(/^\s*([A-Za-z]\d[A-Za-z])[ -]?(\d[A-Za-z]\d)\s*$/, (m, a, b) => `${a} ${b}`.toUpperCase());
+
 export const fullUrl = (v) => {
   const li = String(v).match(/^(?:https?:\/\/)?(?:www\.)?(linkedin\.com\/\S+)$/i);
   if (li) return `https://www.${li[1]}`;
@@ -155,7 +158,7 @@ export const fullUrl = (v) => {
 
 function withOptions(rawValue, options, confidence) {
   if (rawValue == null) return { value: null, confidence: 'red' };
-  if (!options || !options.length) return { value: fullUrl(rawValue), confidence };
+  if (!options || !options.length) return { value: canadianPostal(fullUrl(rawValue)), confidence };
   const { text, fuzzy } = resolveOption(rawValue, options);
   if (!text) return { value: null, confidence: 'red' };
   return { value: text, confidence: fuzzy ? 'red' : confidence };

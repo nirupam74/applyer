@@ -23,6 +23,14 @@ test('postingMatches: right title at an unrelated employer (sponsored redirect)'
   assert.equal(postingMatches({ title: 'Marketing Intern', company: 'Proax Technologies' }, ['Marketing Intern'], 'hellofresh.com careers hellofresh'), false);
 });
 
+test('postingMatches: an ATS that only names the posting in its URL slug (iCIMS login page)', () => {
+  const job = { title: 'Winter Intern 2027– Business Analyst', company: 'Mackenzie Investments' };
+  const text = 'https://careersen-mackenzieinvestments.icims.com/jobs/5997/x/login job opportunities';
+  assert.equal(postingMatches(job, ['Job Opportunities'], text), false);
+  assert.equal(postingMatches(job, ['Job Opportunities', ' jobs 5997 winter intern 2027– business analyst login'], text), true);
+  assert.equal(postingMatches(job, ['Job Opportunities', ' jobs 6120 senior business analyst login'], text), false);
+});
+
 test('postingMatches: "intern" does not match "international", empty title never matches', () => {
   assert.equal(postingMatches({ title: 'Intern', company: '' }, ['International Sales'], ''), false);
   assert.equal(postingMatches({ title: '', company: 'RBC' }, ['Anything'], 'rbc'), false);
@@ -89,6 +97,8 @@ test('chatQuestion: pleasantries are dropped, statements are not questions', asy
   assert.equal(chatQuestion('Thanks for accepting our Terms of Use. What is your first and last name?'), 'What is your first and last name?');
   assert.equal(chatQuestion('Great, thanks Nirupam!'), '');
   assert.equal(chatQuestion('Got it. Please upload your resume.'), 'Please upload your resume.');
+  const ack = 'I understand that this job requires a commitment to full-time hours (minimum 35 hours per week during standard business hours, Monday to Friday).';
+  assert.equal(chatQuestion(`Thanks! ${ack}`), ack);
 });
 
 test('lazyDocs: nothing is prepared until a form asks for files, and then only once', async () => {

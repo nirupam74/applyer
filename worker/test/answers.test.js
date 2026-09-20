@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyWorkAuth, yearsOfExperience, applyRules, fullUrl } from '../apply/answers.js';
+import { classifyWorkAuth, yearsOfExperience, applyRules, fullUrl, canadianPostal } from '../apply/answers.js';
 
 test('classifyWorkAuth: citizen needs no sponsorship and is authorized', () => {
   const c = classifyWorkAuth('Canadian citizen, no sponsorship required');
@@ -52,6 +52,14 @@ test('fullUrl: bare resume-style links gain a scheme, everything else is left al
   assert.equal(fullUrl('https://www.nirupamgupta.com'), 'https://www.nirupamgupta.com');
   assert.equal(fullUrl('nirupam.gupta@mail.utoronto.ca'), 'nirupam.gupta@mail.utoronto.ca');
   assert.equal(fullUrl('Brampton'), 'Brampton');
+});
+
+test('canadianPostal: the spaced form every validator accepts; other values untouched', () => {
+  assert.equal(canadianPostal('L6Y3K7'), 'L6Y 3K7');
+  assert.equal(canadianPostal('l6y-3k7'), 'L6Y 3K7');
+  assert.equal(canadianPostal('L6Y 3K7'), 'L6Y 3K7');
+  assert.equal(canadianPostal('90210'), '90210');
+  assert.equal(canadianPostal('Brampton'), 'Brampton');
 });
 
 test('applyRules: unmatched question returns null (never invents an answer)', () => {

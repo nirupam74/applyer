@@ -193,6 +193,9 @@ async function fillTextInputs(root, ctx, out) {
     const label = await labelFor(el);
     if (!label) continue;
     const { value, confidence } = await getAnswer(ctx, label);
+    // "none" / "N/A" is an answer for a box that must not stay empty. In an optional one (Middle
+    // Name, Phone Extension) it is junk, and Workday validates the extension as part of the phone.
+    if (value && /^(none|n\/?a|nil)\.?$/i.test(value.trim()) && !(await isRequired(el))) continue;
     if (value) {
       if (value.length <= 80) { await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(value, { delay: 15 }).catch(() => el.fill(value).catch(() => {})); }
       else await el.fill(value).catch(() => {});
@@ -799,7 +802,12 @@ export async function landedOnDifferentPosting(page, job) {
     text: (location.href + ' ' + document.title + ' ' + (document.body?.innerText || '').slice(0, 8000)).toLowerCase(),
   })).catch(() => null);
   if (!seen || !seen.text.trim()) return 'page did not render';
-  if (postingMatches(job, seen.headings, seen.text)) return null;
+  // iCIMS (Mackenzie) titles its page "Job Opportunities" and keeps the posting in an iframe; the
+  // title is in the URL slug (/jobs/5997/winter-intern-2027-business-analyst/login) and the frame.
+  let slug = '';
+  try { slug = decodeURIComponent(new URL(page.url()).pathname).replace(/[-_/+]+/g, ' '); } catch { /* malformed escape: no slug */ }
+  const framed = (await Promise.all(page.frames().slice(1, 6).map((f) => f.evaluate(() => [...document.querySelectorAll('h1, h2')].slice(0, 6).map((h) => h.innerText)).catch(() => [])))).flat();
+  if (postingMatches(job, [...seen.headings, slug, ...framed].filter(Boolean), seen.text)) return null;
   return (seen.headings[1] || seen.headings[0] || 'unknown page').trim().slice(0, 120);
 }
 
@@ -809,7 +817,9 @@ export async function landedOnDifferentPosting(page, job) {
 // reply is sent to the employer for real, so there is no dry run, and a question the answers
 // bank cannot answer stops the run instead of guessing.
 const CHAT_DONE = /application (has been|was|is) (submitted|received|complete)|thank(s| you) for applying|successfully (applied|submitted)|(we|i)('ve| have) (received|submitted) your application/i;
-const CHAT_ASKS = /\?|please|what|which|enter|provide|upload|attach|select|choose|type|tell|share|confirm|are you|do you|have you|can you/i;
+// The last alternative: first-person statements the bot wants agreed to with Yes / No ("I understand
+// that this job requires a commitment to full-time hours ..."). They stalled Loblaw's chat.
+const CHAT_ASKS = /\?|please|what|which|enter|provide|upload|attach|select|choose|type|tell|share|confirm|are you|do you|have you|can you|\bi (understand|acknowledge|agree|certify|consent|am (aware|able|willing))\b/i;
 const MAX_CHAT_TURNS = 40;
 
 // The part of a bot turn that is the question: drop leading pleasantries ("Thanks, Nirupam!").
