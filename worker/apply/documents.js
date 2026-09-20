@@ -41,7 +41,10 @@ export function buildCoverLetterDocx({ personal = {}, company, date, paragraphs,
   children.push(coverParagraph(`Dear Hiring Team at ${company},`));
   for (const para of paragraphs) children.push(coverParagraph(para));
   children.push(coverParagraph(closing));
-  children.push(coverParagraph(`Sincerely, ${personal.name || ''}`));
+  // Sign-off: "Sincerely,", an empty line, then the name on its own line.
+  children.push(coverParagraph('Sincerely,'));
+  children.push(coverParagraph(''));
+  children.push(coverParagraph(personal.name || ''));
   const doc = new Document({
     styles: { default: { document: { run: { font: COVER_FONT, size: COVER_SIZE } } } },
     sections: [{ children }],
@@ -139,7 +142,7 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const clDocx = await buildCoverLetterDocx({ personal: profile.personal, company: job.company, date, paragraphs, closing });
   const { pdf: clPdf } = await docxToPdf(clDocx);
-  const clText = [`Dear Hiring Team at ${job.company},`, ...paragraphs, closing, `Sincerely, ${name}`].join('\n\n');
+  const clText = [`Dear Hiring Team at ${job.company},`, ...paragraphs, closing, 'Sincerely,', name].join('\n\n');
 
   await log('saving cover letter');
   const coverRef = userRef.collection('coverLetters').doc();
@@ -183,7 +186,8 @@ export function pickTemplate(versions, pageLimit) {
 // like company.
 export async function prepareBatch({ db, uid, log }, payload = {}) {
   const userRef = db.collection('users').doc(uid);
-  const minScore = payload.minScore || 80;
+  // The member's own bar (settings/jobs.prepareMinScore) applies to the button and to the batch every search queues.
+  const minScore = payload.minScore || (await userRef.collection('settings').doc('jobs').get()).data()?.prepareMinScore || 80;
   const profileSnap = await userRef.collection('profile').doc('profile').get();
   const validFrom = profileSnap.data()?.updatedAt?.toMillis?.() || 0;
   const snap = await userRef.collection('jobs').where('score', '>=', minScore).orderBy('score', 'desc').get();

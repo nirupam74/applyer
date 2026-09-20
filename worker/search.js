@@ -166,6 +166,13 @@ export async function searchJobs({ db, uid, log }, payload) {
   await batch.commit();
   await log(`wrote ${all.length} jobs, top ${Math.min(TOP_N, r)} ranked`);
 
+  // Every search is followed by tailored documents for the strong matches that have none yet.
+  if (payload.prepare !== false) {
+    const now = FieldValue.serverTimestamp();
+    await userRef.collection('tasks').add({ type: 'prepareBatch', payload: {}, status: 'queued', log: [], createdAt: now, updatedAt: now });
+    await log('queued Prepare documents for the new matches');
+  }
+
   return {
     runs,
     unique: found.size,

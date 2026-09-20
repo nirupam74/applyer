@@ -22,7 +22,7 @@ test('buildCoverLetterDocx renders name, greeting, body, and sign-off', async ()
   assert.match(text, /Dear Hiring Team at Acme Corp,/);
   assert.match(text, /First paragraph about the role\./);
   assert.match(text, /I look forward to hearing from you\./);
-  assert.match(text, /Sincerely, Jane Doe/);
+  assert.match(text, /Sincerely,\s*\n\s*\n?\s*Jane Doe/);
   assert.match(text, /jane@personal\.example/);
 });
 
