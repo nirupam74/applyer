@@ -143,6 +143,12 @@ export function buildDocx(structured, personal = {}, opts = {}) {
     }
   }
 
+  for (const [key, title] of [['publications', 'Publications'], ['awards', 'Honours & Awards'], ['volunteer', 'Volunteer Experience']]) {
+    if (!structured[key]?.length) continue;
+    children.push(heading(title, L));
+    for (const line of structured[key]) children.push(bullet(line, L));
+  }
+
   if (structured.education?.length) {
     children.push(heading('Education', L));
     for (const ed of structured.education) {
