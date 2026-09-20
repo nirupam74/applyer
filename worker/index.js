@@ -46,7 +46,9 @@ async function watchUser(uid) {
 
   tasksQuery.onSnapshot(
     (snapshot) => {
-      for (const change of snapshot.docChanges()) {
+      // Oldest first: after a restart the waiting tasks arrive together, in document-id order.
+      const ms = (c) => c.doc.data().createdAt?.toMillis?.() ?? Infinity;
+      for (const change of snapshot.docChanges().sort((x, y) => ms(x) - ms(y))) {
         if (change.type === 'added' || change.type === 'modified') {
           const run = () =>
             claimAndRun(uid, change.doc.ref).catch((err) => {
