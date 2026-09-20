@@ -39,6 +39,8 @@ function watchUser(uid) {
     },
     (err) => {
       log(uid, `tasks listener error: ${err.message}`);
+      // An errored listener is dead; forget the uid so the next refreshUsers re-attaches it.
+      watchedUids.delete(uid);
     }
   );
 }
