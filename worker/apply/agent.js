@@ -121,8 +121,22 @@ async function isRequired(el) {
   return el.evaluate((node) => node.required === true || node.getAttribute('aria-required') === 'true').catch(() => false);
 }
 
+// Every filler goes through isUsable, so this is where page furniture is excluded: site search,
+// job-alert / newsletter sign-ups, and anything in nav/header/footer/sidebar regions. Bare
+// "search" is only matched on the form, never the input: Workday typeaheads are placeholder "Search".
+// ponytail: heuristic exclusion list; scope fills to the detected application <form> if it leaks.
+export function isPageFurniture(node) {
+  if (node.type === 'search' || node.closest('nav, header, footer, aside, [role=search], [role=navigation], [role=complementary], [role=banner], [role=contentinfo]')) return true;
+  const attrs = (n, names) => names.map((a) => n.getAttribute(a) || '').join(' ');
+  const own = attrs(node, ['name', 'id', 'placeholder', 'aria-label']) + ' ' + [...(node.labels || [])].map((l) => l.innerText).join(' ');
+  if (/alert|subscribe|newsletter|notify|talent (community|network)/i.test(own)) return true;
+  const form = node.closest('form');
+  return !!form && /search|alert|subscribe|newsletter|notify/i.test(attrs(form, ['id', 'class', 'name', 'action', 'aria-label']));
+}
+
 async function isUsable(el) {
   try {
+    if (await el.evaluate(isPageFurniture)) return false;
     return (await el.isVisible()) && !(await el.isDisabled());
   } catch {
     return false;
@@ -628,31 +642,57 @@ async function settle(page) {
   await page.waitForTimeout(1000);
 }
 
-// Job boards sometimes redirect an Apply click to an unrelated sponsored posting. The page
-// must name the employer or most of the title before a single field is touched.
-async function landedOnDifferentPosting(page, job) {
-  const text = (await page.evaluate(() => (document.title + ' ' + (document.body?.innerText || '').slice(0, 6000)).toLowerCase()).catch(() => '')) || '';
-  if (!text.trim()) return null; // nothing rendered yet; later checks will report no controls
-  const squash = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const companyToks = squash(job.company).split(' ').filter((w) => w.length > 2 && !/^(inc|ltd|llc|the|group|corp|company|canada)$/.test(w));
-  const titleToks = squash(job.title).split(' ').filter((w) => w.length > 2 && !/^(and|the|for|intern|internship|co|op)$/.test(w));
-  const companyHit = companyToks.length > 0 && companyToks.some((w) => text.includes(w));
-  const titleHits = titleToks.filter((w) => text.includes(w)).length;
-  if (companyHit || (titleToks.length && titleHits >= Math.ceil(titleToks.length * 0.6))) return null;
-  const h1 = (await page.locator('h1').first().innerText().catch(() => '')) || (await page.title().catch(() => ''));
-  return (h1 || 'unknown page').trim().slice(0, 120);
+// Job boards redirect Apply clicks to unrelated sponsored postings, and employer links land on
+// other roles at the same company (an intern application once reached a Senior Director page).
+// A page heading must carry most of the job's title, at the same seniority, AND the page must
+// name the employer, before a single field is touched. A false block costs a manual apply; a
+// false pass sends a real application to the wrong job.
+const TITLE_NOISE = /^(and|the|for|of|in|to|at|with|fall|winter|spring|summer|term|month|remote|hybrid|onsite|\d+)$/;
+const SENIORITY = /^(senior|director|manager|vp|vice|president|principal|lead|head|chief|executive)$/;
+const COMPANY_NOISE = /^(inc|ltd|llc|the|group|corp|company|canada|limited|co)$/;
+
+function titleTokens(v) {
+  return String(v || '').toLowerCase()
+    .replace(/co-?\s?op\b/g, 'coop').replace(/\binternships?\b/g, 'intern').replace(/\bsr\b\.?/g, 'senior')
+    .replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+    .map((w) => (w.length > 3 ? w.replace(/s$/, '') : w))
+    .filter((w) => w.length > 1 && !TITLE_NOISE.test(w));
+}
+
+// headings: the page's title/h1/h2 strings. text: lowercased page text plus URL.
+export function postingMatches(job, headings, text) {
+  const want = titleTokens(job.title);
+  if (!want.length) return false;
+  const titleOk = headings.some((h) => {
+    const have = new Set(titleTokens(h));
+    if ([...have].some((w) => SENIORITY.test(w) && !want.includes(w))) return false;
+    return want.filter((w) => have.has(w)).length >= Math.ceil(want.length * 0.6);
+  });
+  if (!titleOk) return false;
+  const company = String(job.company || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !COMPANY_NOISE.test(w));
+  return company.length === 0 || company.some((w) => text.includes(w));
+}
+
+export async function landedOnDifferentPosting(page, job) {
+  const seen = await page.evaluate(() => ({
+    headings: [document.title, document.querySelector('meta[property="og:title"]')?.content, ...[...document.querySelectorAll('h1, h2')].slice(0, 12).map((h) => h.innerText)].filter(Boolean),
+    text: (location.href + ' ' + document.title + ' ' + (document.body?.innerText || '').slice(0, 8000)).toLowerCase(),
+  })).catch(() => null);
+  if (!seen || !seen.text.trim()) return 'page did not render';
+  if (postingMatches(job, seen.headings, seen.text)) return null;
+  return (seen.headings[1] || seen.headings[0] || 'unknown page').trim().slice(0, 120);
 }
 
 async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
+  // Verify the posting on the page we were sent to, before clicking anything on it.
+  await settle(page);
+  const wrong = await landedOnDifferentPosting(page, ctx.job);
+  if (wrong) return { status: 'blocked', error: `landed on a different posting: ${wrong}`, portalUrl: page.url() };
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
-    if (step === 0) {
-      const wrong = await landedOnDifferentPosting(page, ctx.job);
-      if (wrong) return { status: 'blocked', error: `landed on a different posting: ${wrong}`, portalUrl: page.url() };
-    }
     const pause = await detectPause(page, ctx);
     if (pause) return { status: 'blocked', error: pause };
 
