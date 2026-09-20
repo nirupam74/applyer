@@ -39,6 +39,16 @@ test('heuristicScore ranks a matching intern role above a senior role', () => {
   assert.equal(heuristicScore(intern, profile, now), hi, 'deterministic');
 });
 
+test('heuristicScore: a graduate profile is not offered internships, and "Internal" is not an internship', () => {
+  const now = new Date('2026-09-20');
+  const grad = { preferences: { titles: ['Research Associate'], locations: ['Toronto, ON'], employmentType: ['Full-time'] }, skills: {} };
+  const job = (title) => ({ title, location: 'Toronto, ON', employmentType: 'Full-time', postedAt: now });
+  const plain = heuristicScore(job('Research Associate'), grad, now);
+  assert.equal(heuristicScore(job('Research Associate, Internal Medicine'), grad, now), plain);
+  assert.equal(heuristicScore(job('Research Associate Intern'), grad, now), plain - 25);
+  assert.equal(buildQueries({ preferences: {}, experience: [{ title: 'Research Associate' }], personal: { location: 'Toronto, ON' } }).titles[0], 'Research Associate');
+});
+
 test('mergeJob unions sources and keeps the longer description', () => {
   const a = mergeJob(null, { source: 'linkedin', url: 'u1', title: 'X', company: 'C', location: 'L', description: 'short', externalId: '1' });
   const b = mergeJob(a, { source: 'indeed', url: 'u2', title: 'X', company: 'C', location: 'L', description: 'much longer text', externalId: '2' });

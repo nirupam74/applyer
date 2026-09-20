@@ -32,7 +32,7 @@ export async function docxToPdf(docxBuffer) {
   try {
     const docxPath = path.join(dir, 'resume.docx');
     await fs.writeFile(docxPath, docxBuffer);
-    const profileDir = path.join(os.homedir(), '.applyer', 'lo-profile');
+    const profileDir = process.env.APPLYER_LO_PROFILE || path.join(os.homedir(), '.applyer', 'lo-profile');
     try {
       await run(SOFFICE, [`-env:UserInstallation=file://${profileDir}`, '--headless', '--norestore', '--convert-to', 'pdf', '--outdir', dir, docxPath], {
         timeout: 120_000,

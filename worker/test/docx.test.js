@@ -37,3 +37,9 @@ test('buildDocx round-trips through bytesToText with name and company', async ()
   assert.match(text, /Jane Doe/i);
   assert.match(text, /Acme Corp/);
 });
+
+test('keepShrunk: condensing cannot add publications, awards, volunteer lines or projects', async () => {
+  const { keepShrunk } = await import('../resume/optimize.js');
+  const out = keepShrunk({ publications: [], awards: ['a', 'b'], projects: [{ name: 'p' }] }, { publications: ['x'], awards: ['a', 'b', 'c'], volunteer: ['v'], projects: [{ name: 'p' }] });
+  assert.deepEqual(out, { publications: [], awards: ['a', 'b'], volunteer: [], projects: [{ name: 'p' }] });
+});

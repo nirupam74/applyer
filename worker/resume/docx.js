@@ -86,6 +86,8 @@ function dateRange(start, end) {
 }
 
 const SKILL_LABELS = {
+  research: 'Research',
+  laboratory: 'Laboratory',
   marketing: 'Marketing',
   creative: 'Design & content',
   technical: 'Technical',

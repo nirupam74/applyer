@@ -74,6 +74,8 @@ export function normalizeProjectItem(item) {
 export function normalizeSkills(input) {
   const s = input || {};
   return {
+    research: coerceStringArray(s.research),
+    laboratory: coerceStringArray(s.laboratory),
     technical: coerceStringArray(s.technical),
     tools: coerceStringArray(s.tools),
     programming: coerceStringArray(s.programming),
@@ -135,7 +137,7 @@ const PROFILE_SHAPE = `{
   "publications": string[] (one full citation per entry, copied as written, including manuscripts in preparation or under review),
   "awards": string[] (one line per honour, award, scholarship, certification or licence, with its year),
   "volunteer": string[] (one line per volunteer role or activity: role, organisation, dates),
-  "skills": {"technical": string[], "tools": string[], "programming": string[], "marketing": string[], "business": string[], "communication": string[], "leadership": string[], "creative": string[], "industry": string[], "certifications": string[], "languages": string[]},
+  "skills": {"research": string[] (research methods), "laboratory": string[] (bench and clinical techniques), "technical": string[], "tools": string[], "programming": string[], "marketing": string[], "business": string[], "communication": string[], "leadership": string[], "creative": string[], "industry": string[], "certifications": string[], "languages": string[]},
   "preferences": {"titles": string[], "industries": string[], "locations": string[], "remote": "remote"|"hybrid"|"onsite"|"any", "employmentType": string[], "salaryMin": number|null, "seniority": string},
   "workAuthorization": string,
   "availability": string,

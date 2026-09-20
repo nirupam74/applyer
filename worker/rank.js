@@ -74,6 +74,7 @@ export function searchLocation(locations, fallback) {
   return raw.replace(/,\s*Ontario\b/i, ', ON') || 'Canada';
 }
 
+const INTERN = /\b(intern(ship)?s?|co-?op)\b/i; // not "internal" / "international"
 const SENIOR = /\b(senior|sr\.?|lead|principal|director|head of|manager|vp|chief|staff)\b/i;
 const STOP = new Set(['and', 'or', 'the', 'of', 'intern', 'internship', 'co', 'op', 'coop', 'a', 'an', 'in', 'for']);
 
@@ -82,10 +83,10 @@ function tokens(s) {
 }
 
 // Deterministic 0-100 heuristic. Title fit 40, employment type 15, location 15,
-// recency 15, skills 15, minus a seniority penalty for intern/junior profiles.
+// recency 15, skills 15, minus a level penalty: senior roles for intern/junior profiles,
+// intern/co-op roles for everyone else (they require enrolment).
 export function heuristicScore(job, profile, now = new Date()) {
   const prefs = profile.preferences || {};
-  const title = squash(job.title);
   const titleToks = new Set(tokens(job.title));
 
   let titleFit = 0;
@@ -100,7 +101,7 @@ export function heuristicScore(job, profile, now = new Date()) {
   let score = Math.round(titleFit * 40);
 
   const wantsIntern = (prefs.employmentType || []).some((t) => /intern|co-?op/i.test(t)) || /intern|co-?op|junior/i.test(prefs.seniority || '');
-  const jobIsIntern = /\bintern|co-?op\b/i.test(`${job.title} ${job.employmentType || ''}`);
+  const jobIsIntern = INTERN.test(`${job.title} ${job.employmentType || ''}`);
   const typeMatch = (prefs.employmentType || []).some((t) => squash(t).split(' ')[0] === squash(job.employmentType || '').split(' ')[0]);
   if (typeMatch || (wantsIntern && jobIsIntern)) score += 15;
   else if (!job.employmentType) score += 5;
@@ -124,7 +125,8 @@ export function heuristicScore(job, profile, now = new Date()) {
   score += Math.min(15, hits * 3);
 
   if (wantsIntern && SENIOR.test(job.title) && !jobIsIntern) score -= 25;
-  if (/\bintern/i.test(title) === false && wantsIntern && /\b(5|6|7|8|9|10)\+?\s*years/.test(text)) score -= 10;
+  if (!jobIsIntern && wantsIntern && /\b(5|6|7|8|9|10)\+?\s*years/.test(text)) score -= 10;
+  if (!wantsIntern && jobIsIntern) score -= 25;
 
   return Math.max(0, Math.min(100, score));
 }
@@ -137,7 +139,7 @@ export function finalScore(heuristic, matchPct) {
 function profileSummary(profile) {
   const p = profile;
   return {
-    education: (p.education || []).map((e) => `${e.degree || ''} ${e.field || ''} ${e.institution || ''} ${e.graduation || e.end || ''}`.trim()),
+    education: (p.education || []).map((e) => `${e.degree || ''} ${e.program || e.major || ''} ${e.institution || ''} ${e.graduation || e.end || ''}`.trim()),
     experience: (p.experience || []).map((e) => ({
       title: e.title,
       company: e.company,
@@ -145,6 +147,7 @@ function profileSummary(profile) {
       bullets: [...(e.responsibilities || []), ...(e.achievements || [])].slice(0, 6),
     })),
     projects: (p.projects || []).map((x) => `${x.name || ''}: ${x.description || ''}`.slice(0, 300)),
+    publications: (p.publications || []).map((c) => String(c).slice(0, 200)),
     skills: p.skills || {},
     preferences: p.preferences || {},
     workAuthorization: p.workAuthorization || '',

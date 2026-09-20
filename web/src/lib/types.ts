@@ -55,6 +55,8 @@ export interface Project {
 }
 
 export interface Skills {
+  research: string[]
+  laboratory: string[]
   technical: string[]
   tools: string[]
   programming: string[]
@@ -154,6 +156,8 @@ export function emptyProfile(): Profile {
     experience: [],
     projects: [],
     skills: {
+      research: [],
+      laboratory: [],
       technical: [],
       tools: [],
       programming: [],

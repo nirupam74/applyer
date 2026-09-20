@@ -40,6 +40,8 @@ const emptyExperience: Experience = {
 const emptyProject: Project = { name: '', description: '', technologies: [], link: '' }
 
 const skillLabels: Record<keyof Skills, string> = {
+  research: 'Research',
+  laboratory: 'Laboratory',
   technical: 'Technical',
   tools: 'Tools',
   programming: 'Programming',
@@ -203,7 +205,7 @@ export default function ProfileEditor<T extends EditableResume>({ value, onChang
             <ChipList
               key={cat}
               label={skillLabels[cat]}
-              values={value.skills[cat]}
+              values={value.skills[cat] || []}
               onChange={(v) => set('skills' as keyof T, { ...value.skills, [cat]: v } as T[keyof T])}
             />
           ))}

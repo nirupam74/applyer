@@ -17,7 +17,7 @@ const STRUCTURED_SHAPE = `{
   "publications": string[] (one full citation per entry, copied as written, including manuscripts in preparation or under review),
   "awards": string[] (one line per honour, award, scholarship, certification or licence, with its year),
   "volunteer": string[] (one line per volunteer role or activity: role, organisation, dates) (publications, awards and volunteer come straight from the profile: never reword a citation, and a publication is not a project),
-  "skills": {"technical": string[], "tools": string[], "programming": string[], "marketing": string[], "business": string[], "communication": string[], "leadership": string[], "creative": string[], "industry": string[], "certifications": string[], "languages": string[]}
+  "skills": {"research": string[] (research methods), "laboratory": string[] (bench and clinical techniques), "technical": string[], "tools": string[], "programming": string[], "marketing": string[], "business": string[], "communication": string[], "leadership": string[], "creative": string[], "industry": string[], "certifications": string[], "languages": string[]}
 }`;
 
 const SECTIONS = ['summary', 'education', 'experience', 'projects', 'publications', 'awards', 'volunteer', 'skills'];
@@ -139,8 +139,9 @@ export async function optimizeResume({ profile, originalText, existingStructured
 
   if (section) {
     const shape = `{"${section}": <the "${section}" field of ${STRUCTURED_SHAPE}>, "ats": ${ATS_SHAPE}}`;
+    const hasOld = JSON.stringify(base[section] ?? '').length > 4;
     const prompt = [
-      `Regenerate only the "${section}" section of an ATS-optimized resume. Keep every other section as-is; do not return them. The new "${section}" must be a materially improved rewrite, not a copy of the existing one.`,
+      `Regenerate only the "${section}" section of an ATS-optimized resume. Keep every other section as-is; do not return them. The new "${section}" must be a materially improved rewrite, not a copy of the existing one.${hasOld ? ' The resume already fills its page limit: the new section must take no more lines than the existing one.' : ''}`,
       `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
       `Original resume text:\n${originalText || ''}`,
       `Existing structured resume for context:\n${JSON.stringify(base)}`,
@@ -177,10 +178,19 @@ export async function condenseStructured({ structured, profile, pages, targetPag
   const target = overflowLines + 2;
   const pct = totalLines ? Math.round((target / totalLines) * 100) : 15;
   const prompt = [
-    `This resume renders to ${pages} page(s) at the tightest layout but must fit on ${targetPages} page(s). It is ${overflowLines} lines too long (each line is about 110 characters). Remove roughly ${target} lines of text in total, about ${pct} percent, and no more than that: the final page should be full, not sparse. Order of cuts: first shorten the wordiest bullets and the summary, then merge bullets that repeat each other, then trim the longest skill lines and the coursework list (never below 8 coursework items), and only as a last resort drop a whole bullet (never a role, project, or degree). Keep every skill category that has entries. Keep every date and number. Publications are never reworded and are the last thing to cut (newest and first-author ones stay); awards and volunteer lines may be dropped whole, smallest and oldest first, before any experience bullet is lost.`,
+    `This resume renders to ${pages} page(s) at the tightest layout but must fit on ${targetPages} page(s). It is ${overflowLines} lines too long (each line is about 110 characters). Remove roughly ${target} lines of text in total, about ${pct} percent, and no more than that: the final page should be full, not sparse. Order of cuts: first shorten the wordiest bullets and the summary, then merge bullets that repeat each other, then trim the longest skill lines and the coursework list (never below 8 coursework items), and only as a last resort drop a whole bullet (never a role, project, or degree). Keep every skill category that has entries. Keep every date and number. Publications are never reworded and are the last thing to cut (newest and first-author ones stay); awards and volunteer lines may be dropped whole, smallest and oldest first, before any experience bullet is lost. Only remove or shorten: never add a section, entry or line that the current structured resume does not have, even when the profile has it.`,
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Current structured resume:\n${JSON.stringify(structured)}`,
   ].join('\n\n');
   const out = await ask(prompt, shape);
-  return normalizeStructured(out.structured);
+  return keepShrunk(structured, normalizeStructured(out.structured));
+}
+
+// Condensing never adds entries: the LLM sees the whole profile and once "condensed" a 4-line
+// overflow into 24 by copying publications and awards into a resume that had none.
+export function keepShrunk(before, after) {
+  for (const k of ['projects', 'publications', 'awards', 'volunteer']) {
+    after[k] = (after[k] || []).slice(0, (before[k] || []).length);
+  }
+  return after;
 }
