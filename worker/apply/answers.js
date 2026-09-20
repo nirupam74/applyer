@@ -56,7 +56,8 @@ const RULES = [
   { re: /is all (of )?the information.{0,40}correct/i, get: () => 'Yes' },
   { re: /email/i, get: (p, s) => s.email || p.personal?.email },
   // Not "Phone Extension" / "Phone Device Type": a live Workday run put the number in the extension box.
-  { re: /^(?!.*\b(extension|ext|device|type)\b).*(phone|mobile|telephone)/i, get: (p) => p.personal?.phone },
+  // Nor "Country / Territory Phone Code": Workday got the whole number typed into it.
+  { re: /^(?!.*\b(extension|ext|device|type|code)\b).*(phone|mobile|telephone)/i, get: (p) => p.personal?.phone },
   { re: /first (and|&|\/) ?last name/i, get: (p) => p.personal?.name }, // before the last-name rule, which it also matches
   { re: /first name|given name/i, get: (p) => firstOf(p.personal?.name) },
   { re: /last name|family name|surname/i, get: (p) => lastOf(p.personal?.name) },
@@ -224,6 +225,13 @@ export async function getAnswer({ db, uid, profile, settings, job }, question, o
     const res = withOptions(bank.answer, options, 'green');
     await record('');
     if (res.value) return res;
+  }
+
+  // "How did you hear about us?": the board this job was found on. Not a profile fact, so not in RULES.
+  const board = { linkedin: 'LinkedIn', indeed: 'Indeed', ziprecruiter: 'ZipRecruiter', glassdoor: 'Glassdoor' }[job?.sources?.[0]?.name];
+  if (board && /(how|where) did you (first )?(hear|find|learn)/i.test(question)) {
+    const res = withOptions(board, options, 'green');
+    if (res.value) { await record(res.value); return res; }
   }
 
   const rule = applyRules(profile, settings, question);

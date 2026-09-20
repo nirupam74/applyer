@@ -187,6 +187,9 @@ async function fillTextInputs(root, ctx, out) {
     if (role === 'combobox') continue; // handled by fillReactSelects, never both
     const current = await el.inputValue().catch(() => '');
     if (current.trim()) continue;
+    // Workday multi-select (country phone code): its search box is always empty, the choice sits
+    // beside it as a pill. Typing again every round re-opened the list over the phone field.
+    if (await el.evaluate((e) => !!e.closest('[data-automation-id="multiSelectContainer"]')?.querySelector('[data-automation-id="selectedItem"]')).catch(() => false)) continue;
     const label = await labelFor(el);
     if (!label) continue;
     const { value, confidence } = await getAnswer(ctx, label);
@@ -213,7 +216,9 @@ async function acceptedPhone(el, label, value) {
   if (!/phone|mobile|\btel/i.test(label) || nationalDigits(value).length < 10) return value;
   await el.evaluate((e) => e.blur()).catch(() => {});
   await new Promise((r) => setTimeout(r, 600));
-  if ((await el.getAttribute('aria-invalid').catch(() => null)) !== 'true') return value;
+  // Workday only complains after Next, but it labels its country-code box.
+  const ownCodeBox = await el.evaluate((e) => /phone code/i.test((e.closest('form') || document.body).innerText)).catch(() => false);
+  if (!ownCodeBox && (await el.getAttribute('aria-invalid').catch(() => null)) !== 'true') return value;
   const digits = nationalDigits(value);
   await el.fill(digits).catch(() => {});
   await el.evaluate((e) => e.blur()).catch(() => {});
@@ -251,6 +256,36 @@ async function pickSuggestion(el) {
     await new Promise((r) => setTimeout(r, 600));
   } catch {
     // no suggestion list: plain text input
+  }
+}
+
+// Workday dropdowns: a button that opens a listbox ("Select One"). Open it, read the options,
+// pick the answer by its exact text.
+async function fillListboxButtons(page, root, ctx, out) {
+  for (const btn of await root.$$('button[aria-haspopup="listbox"]')) {
+    if (!(await isUsable(btn))) continue;
+    const shown = (await btn.innerText().catch(() => '')).trim();
+    if (shown && !/^select( one)?$/i.test(shown)) continue; // already chosen
+    const label = (await labelFor(btn)).replace(/\s*select one.*$/i, '').trim();
+    if (!label) continue;
+    try {
+      await btn.click();
+      const opts = page.locator('[role="listbox"] [role="option"]').filter({ visible: true });
+      await opts.first().waitFor({ state: 'visible', timeout: 4000 });
+      const options = (await opts.allInnerTexts()).map((t) => t.trim()).filter((t) => t && !/^select one$/i.test(t));
+      const { value, confidence } = await getAnswer(ctx, label, options);
+      if (value) {
+        await opts.getByText(value, { exact: true }).first().click();
+        out.push({ name: label, value, confidence });
+      } else {
+        await page.keyboard.press('Escape').catch(() => {});
+        out.push({ name: label, value: '', confidence: 'red' });
+        if (/\*|required/i.test(label + (await btn.getAttribute('aria-label').catch(() => '')))) ctx._requiredGap = true;
+      }
+      await page.waitForTimeout(300);
+    } catch {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
   }
 }
 
@@ -426,6 +461,7 @@ async function fillGenericForm(page, root, ctx, docs) {
   await fillTextInputs(root, ctx, out);
   await fillNativeSelects(root, ctx, out);
   await fillReactSelects(page, root, ctx, out);
+  await fillListboxButtons(page, root, ctx, out);
   await fillRadioGroups(root, ctx, out);
   await fillCheckboxes(root, ctx, out);
   if (docs) await uploadFiles(root, docs, out);
