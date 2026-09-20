@@ -13,6 +13,7 @@ const statusStyles: Record<string, string> = {
   filling: 'bg-[var(--warning-bg)] text-[var(--warning)]',
   submitted: 'bg-[var(--success-bg)] text-[var(--success)]',
   blocked: 'bg-[var(--warning-bg)] text-[var(--warning)]',
+  needs_human: 'bg-[var(--warning-bg)] text-[var(--warning)]',
   failed: 'bg-[var(--danger-bg)] text-[var(--danger)]',
 }
 
@@ -77,9 +78,10 @@ export default function ApplicationDetail() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u))
   }, [app?.screenshots])
 
-  async function retry() {
+  // headed: the worker opens a visible browser window on the Mac and waits for you to solve the CAPTCHA.
+  async function retry(headed = false) {
     if (!app) return
-    setRetryTaskId(await enqueueTask(uid, 'applyToJob', { jobId: app.jobId }))
+    setRetryTaskId(await enqueueTask(uid, 'applyToJob', { jobId: app.jobId, ...(headed ? { headed: true } : {}) }))
   }
 
   if (app === undefined) return <p className="text-sm text-[var(--text-muted)]">Loading...</p>
@@ -96,7 +98,7 @@ export default function ApplicationDetail() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${statusStyles[app.status]}`}>
-            {app.status}
+            {app.status.replace("_", " ")}
           </span>
           <h1 className="mt-2 text-2xl font-semibold text-[var(--text)]">
             {job ? (
@@ -113,14 +115,26 @@ export default function ApplicationDetail() {
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => void retry()}
-          className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}
-        >
-          Retry
-        </button>
+        <div className="flex gap-2">
+          {app.status === 'needs_human' && (
+            <button type="button" onClick={() => void retry(true)} className={`${btn} bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]`}>
+              Solve CAPTCHA
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void retry()}
+            className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}
+          >
+            Retry
+          </button>
+        </div>
       </div>
+      {app.status === 'needs_human' && (
+        <p className="text-sm text-[var(--text-muted)]">
+          This application stopped at a CAPTCHA. Solve CAPTCHA opens a browser window on the Mac running the worker, fills the form again, and waits up to 10 minutes for you to complete the challenge before it submits.
+        </p>
+      )}
 
       {retryTaskId && <TaskStatus uid={uid} taskId={retryTaskId} />}
 

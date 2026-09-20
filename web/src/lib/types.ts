@@ -226,7 +226,7 @@ export interface ReviewField {
 
 export interface Application {
   jobId: string
-  status: 'preparing' | 'filling' | 'submitted' | 'blocked' | 'failed'
+  status: 'preparing' | 'filling' | 'submitted' | 'blocked' | 'needs_human' | 'failed'
   log: string[]
   resumeVersionId?: string
   coverLetterId?: string

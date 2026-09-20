@@ -10,10 +10,11 @@ const UA =
 
 // One persistent Chromium profile for every adapter, so cookies and consent
 // choices survive between runs. Callers get a context and must close it.
-export async function openBrowser() {
+// headed: a visible window, used only when the user has asked to solve a CAPTCHA themselves.
+export async function openBrowser({ headed = false } = {}) {
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
   return chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: true,
+    headless: !headed,
     channel: 'chromium',
     userAgent: UA,
     locale: 'en-CA',
@@ -27,9 +28,9 @@ export async function openBrowser() {
 // launchPersistentContext can only hold the profile lock once at a time. The chain itself
 // never rejects, so one failed run doesn't wedge the queue for the next caller.
 let chain = Promise.resolve();
-export function withBrowser(fn) {
+export function withBrowser(fn, opts) {
   const run = async () => {
-    const context = await openBrowser();
+    const context = await openBrowser(opts);
     try {
       return await fn(context);
     } finally {

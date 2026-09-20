@@ -28,7 +28,9 @@ function runClaude(prompt) {
       { cwd: WORKER_DIR, maxBuffer: 20 * 1024 * 1024, timeout: 240_000 },
       (err, stdout, stderr) => {
         if (err) {
-          reject(new Error(`claude CLI failed: ${err.message} ${stderr}`));
+          // execFile's message is only the command line; say why it died (timeout kill, signal, exit code).
+          const why = err.killed ? 'timed out after 240 s' : err.signal ? `killed by ${err.signal}` : `exit code ${err.code}`;
+          reject(new Error(`claude CLI failed (${why}): ${(stderr || stdout || '').slice(0, 500)}`));
           return;
         }
         resolve(stdout);

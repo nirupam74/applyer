@@ -14,6 +14,7 @@ const statusStyles: Record<string, string> = {
   filling: 'bg-[var(--warning-bg)] text-[var(--warning)]',
   submitted: 'bg-[var(--success-bg)] text-[var(--success)]',
   blocked: 'bg-[var(--warning-bg)] text-[var(--warning)]',
+  needs_human: 'bg-[var(--warning-bg)] text-[var(--warning)]',
   failed: 'bg-[var(--danger-bg)] text-[var(--danger)]',
 }
 
@@ -124,7 +125,7 @@ function Row({ app, job }: { app: ApplicationRow; job: JobRow | undefined }) {
       <td className="px-3 py-2 text-[var(--text-muted)]">{job?.company ?? ''}</td>
       <td className="px-3 py-2">
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize ${statusStyles[app.status]}`}>
-          {app.status}
+          {app.status.replace("_", " ")}
         </span>
       </td>
       <td className="px-3 py-2 whitespace-nowrap text-[var(--text-muted)]">

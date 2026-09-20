@@ -20,9 +20,26 @@ function log(uid, msg) {
   console.log(`${new Date().toISOString()} [${uid}] ${msg}`);
 }
 
-function watchUser(uid) {
+// A restart kills whatever was in flight and leaves its docs saying "running"/"filling" forever.
+// Once per uid per process (never on a listener re-attach, which can happen mid-task).
+const sweptUids = new Set();
+async function sweepInterrupted(uid) {
+  if (sweptUids.has(uid)) return;
+  sweptUids.add(uid);
+  const userRef = db.collection('users').doc(uid);
+  const stale = [
+    ...(await userRef.collection('tasks').where('status', '==', 'running').get()).docs,
+    ...(await userRef.collection('applications').where('status', 'in', ['preparing', 'filling']).get()).docs,
+  ];
+  for (const d of stale) await d.ref.update({ status: 'failed', error: 'interrupted by a worker restart', updatedAt: FieldValue.serverTimestamp() });
+  if (stale.length) log(uid, `marked ${stale.length} interrupted task(s)/application(s) as failed`);
+}
+
+async function watchUser(uid) {
   if (watchedUids.has(uid)) return;
   watchedUids.add(uid);
+  // Sweep before listening, or a task claimed in between would be swept as stale.
+  await sweepInterrupted(uid).catch((err) => log(uid, `sweep failed: ${err.message}`));
   log(uid, 'watching tasks');
 
   const tasksQuery = db.collection('users').doc(uid).collection('tasks').where('status', '==', 'queued');

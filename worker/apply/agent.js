@@ -2,6 +2,7 @@ import admin from 'firebase-admin';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { withBrowser, looksBlocked, sleep } from '../sources/browser.js';
 import { emptyProfile } from '../resume/extract.js';
 import { getAnswer } from './answers.js';
@@ -13,6 +14,8 @@ const FieldValue = admin.firestore.FieldValue;
 const MAX_SCREENSHOTS = 6;
 const MAX_SCREENSHOT_BYTES = 300 * 1024;
 const MAX_STEPS = 12;
+export const MIN_APPLY_SCORE = 80; // never apply below this match score (web/src/pages/Jobs.tsx hides them too)
+const HUMAN_WAIT_MS = 10 * 60e3;
 
 // ---- small page helpers -----------------------------------------------------
 
@@ -27,6 +30,32 @@ async function detectPause(page, ctx) {
   if (!raw || !raw.startsWith('verification code')) return raw;
   const ok = await enterVerificationCode(page, ctx).catch((err) => { ctx.log && ctx.log(`mail: ${err.message}`); return false; });
   return ok ? null : `blocked: ${raw} and no code arrived by email`;
+}
+
+const SUBMIT_TEXTS = ['Submit Application', 'Submit application', 'Submit', 'Send Application'];
+const NEXT_TEXTS = ['Next', 'Continue', 'Save and Continue', 'Save & Continue'];
+const isCaptcha = (pause) => /^captcha detected/.test(pause || '');
+
+// CAPTCHA handoff. The agent never solves or dodges a challenge. Headless runs report
+// needs_human; when the user asks for a visible run (payload.headed) the window comes to the
+// front, a notification goes out, and the agent waits for the user to solve it themselves.
+function notify(message) {
+  if (process.env.NODE_TEST_CONTEXT) return; // set by node --test
+  execFile('osascript', ['-e', `display notification ${JSON.stringify(message)} with title "Applyer" sound name "Ping"`], () => {});
+}
+
+export async function waitForHuman(page, ctx, pause) {
+  if (!ctx.headed || !isCaptcha(pause)) return pause;
+  await ctx.log?.(`${pause}: waiting up to 10 min for you to solve it in the open window`);
+  notify(`Solve the CAPTCHA for ${ctx.job.title} at ${ctx.job.company} in the open browser window.`);
+  await page.bringToFront().catch(() => {});
+  for (const end = Date.now() + HUMAN_WAIT_MS; Date.now() < end; ) {
+    await page.waitForTimeout(3000);
+    if (page.isClosed()) return 'the window was closed before the CAPTCHA was solved';
+    pause = await detectPauseRaw(page);
+    if (!isCaptcha(pause)) { await ctx.log?.('CAPTCHA solved by the user, continuing'); return detectPause(page, ctx); }
+  }
+  return `${pause}: nobody solved it within 10 minutes`;
 }
 
 async function enterVerificationCode(page, ctx) {
@@ -44,13 +73,15 @@ async function enterVerificationCode(page, ctx) {
   return true;
 }
 
-async function detectPauseRaw(page) {
+export async function detectPauseRaw(page) {
   // Only a VISIBLE challenge counts. Pages routinely load the reCAPTCHA script
   // (LinkedIn does) without ever showing a challenge; an invisible v3 badge is not a wall.
   try {
     const found = await page.evaluate(() => {
       const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 40 && r.height > 40 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0'; };
-      for (const f of document.querySelectorAll('iframe')) {
+      // A solved checkbox stays on screen; the response token is what says it is done.
+      const solved = [...document.querySelectorAll('[name="g-recaptcha-response"], [name="h-captcha-response"], [name="cf-turnstile-response"]')].some((t) => (t.value || '').length > 20);
+      for (const f of solved ? [] : document.querySelectorAll('iframe')) {
         const src = f.getAttribute('src') || '';
         if (/size=invisible/.test(src)) continue;
         if (/recaptcha\/api2\/(anchor|bframe)|recaptcha\/enterprise\/(anchor|bframe)/.test(src) && visible(f)) return 'recaptcha';
@@ -58,7 +89,7 @@ async function detectPauseRaw(page) {
         if (/challenges\.cloudflare\.com/.test(src) && visible(f)) return 'cloudflare turnstile';
         if (/arkoselabs|funcaptcha/.test(src) && visible(f)) return 'arkose';
       }
-      for (const el of document.querySelectorAll('.cf-turnstile, .h-captcha, #challenge-running, #px-captcha')) if (visible(el)) return 'challenge widget';
+      for (const el of solved ? [] : document.querySelectorAll('.cf-turnstile, .h-captcha, #challenge-running, #px-captcha')) if (visible(el)) return 'challenge widget';
       const text = (document.body?.innerText || '').toLowerCase();
       if (/verify you are human|i'm not a robot|prove you are human|press and hold/.test(text)) return 'challenge text';
       const codeHints = ["verification code","security code","enter the code","one-time passcode","6-digit code","confirm your identity"];
@@ -180,17 +211,24 @@ async function pickSuggestion(el) {
     await new Promise((r) => setTimeout(r, 1500));
     const sel = '.dropdown-results > *, [role="listbox"] [role="option"], ul[class*="suggest" i] li, [class*="autocomplete" i] [class*="item" i], [class*="typeahead" i] li, .pac-item';
     let opt = frame.locator(sel).filter({ visible: true }).first();
-    if (!(await opt.count().catch(() => 0))) {
-      // Lookup services sometimes answer "no results" under load; retype once after a pause.
+    // Lookup services (Lever's location field) answer "No location found" under load and clear
+    // the input. Retype with a longer pause each time. A field that kept its value and shows no
+    // error is a plain text input: leave it alone.
+    for (const pause of [6000, 12000]) {
+      if (await opt.count().catch(() => 0)) break;
       const typed = await el.inputValue().catch(() => '');
       const noResults = await frame.locator('text=/no (location|results?) found/i').filter({ visible: true }).count().catch(() => 0);
-      if (!typed && !noResults) return;
-      await new Promise((r) => setTimeout(r, 6000));
-      await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(typed || el._lastTyped || '', { delay: 40 }).catch(() => {});
-      await new Promise((r) => setTimeout(r, 2500));
+      if (typed && !noResults) {
+        await new Promise((r) => setTimeout(r, 1500)); // slow suggestion lists get one more look
+        if (await opt.count().catch(() => 0)) break;
+        return;
+      }
+      await new Promise((r) => setTimeout(r, pause));
+      await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(el._lastTyped || typed, { delay: 60 }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 3000));
       opt = frame.locator(sel).filter({ visible: true }).first();
-      if (!(await opt.count().catch(() => 0))) return;
     }
+    if (!(await opt.count().catch(() => 0))) return;
     await opt.click({ timeout: 3000 }); // a real pointer click: some widgets ignore synthetic clicks
     await new Promise((r) => setTimeout(r, 600));
   } catch {
@@ -498,11 +536,11 @@ async function recordFields(appRef, fields) {
   await appRef.update({ 'review.fields': FieldValue.arrayUnion(...fields) }).catch(() => {});
 }
 
-function pickApplyUrl(job) {
-  const sources = job.sources || [];
-  const linkedinSrc = sources.find((s) => s.name === 'linkedin');
-  const src = linkedinSrc || sources[0];
-  return (src && (src.applyUrl || src.url)) || job.applyUrl || job.url;
+// Every place this job was found, LinkedIn first. A board that redirects to an unrelated
+// posting (ZipRecruiter 1-Click, LinkedIn links to a generic careers page) is skipped for the next.
+export function applyUrls(job) {
+  const sources = [...(job.sources || [])].sort((a, b) => (b.name === 'linkedin') - (a.name === 'linkedin'));
+  return [...new Set([...sources.map((s) => s.applyUrl || s.url), job.applyUrl, job.url].filter(Boolean))];
 }
 
 // Reuse a previous attempt's documents for this job when they still exist on disk, so a retry
@@ -552,7 +590,7 @@ async function handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields) {
   const root = (await modal.count().catch(() => 0)) ? modal : page;
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const pause = await detectPause(page, ctx);
+    const pause = await waitForHuman(page, ctx, await detectPause(page, ctx));
     if (pause) return { status: 'blocked', error: pause };
 
     // Uncheck "follow company" if present.
@@ -579,6 +617,8 @@ async function handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields) {
       }
       if (ctx._requiredGap) return { status: 'blocked', error: 'required field(s) left empty' };
       if (!ctx.autoSubmit) return { status: 'ready', portalUrl: page.url() };
+      const still = captchaInForm && (await waitForHuman(page, ctx, pause));
+      if (still) return { status: 'blocked', error: still, portalUrl: page.url() };
       const result = await submitAndVerify(page, submitBtn);
       await takeShot(page, appRef, screenshots);
       if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
@@ -683,18 +723,119 @@ export async function landedOnDifferentPosting(page, job) {
   return (seen.headings[1] || seen.headings[0] || 'unknown page').trim().slice(0, 120);
 }
 
+// ---- Paradox chat-bot applications (Loblaw's "Alex") --------------------------------
+// The application is a conversation inside an <apply-widget> open shadow root: Apply Now opens
+// the chat, the Terms are accepted in a dialog, then the bot asks one question at a time. Every
+// reply is sent to the employer for real, so there is no dry run, and a question the answers
+// bank cannot answer stops the run instead of guessing.
+const CHAT_DONE = /application (has been|was|is) (submitted|received|complete)|thank(s| you) for applying|successfully (applied|submitted)|(we|i)('ve| have) (received|submitted) your application/i;
+const CHAT_ASKS = /\?|please|what|which|enter|provide|upload|attach|select|choose|type|tell|share|confirm|are you|do you|have you|can you/i;
+const MAX_CHAT_TURNS = 40;
+
+// The part of a bot turn that is the question: drop leading pleasantries ("Thanks, Nirupam!").
+export function chatQuestion(message) {
+  const sentences = String(message || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/);
+  const i = sentences.findIndex((t) => CHAT_ASKS.test(t));
+  return i < 0 ? '' : sentences.slice(i).join(' ');
+}
+
+async function handleParadoxChat(page, ctx, docs, appRef, screenshots, allFields) {
+  const blocked = async (error) => { await takeShot(page, appRef, screenshots); return { status: 'blocked', error, portalUrl: page.url() }; };
+  if (!ctx.autoSubmit) return blocked('chat-bot application: every reply is sent for real, so it cannot be dry-run');
+  const w = page.locator('apply-widget');
+  const botMessages = () => w.locator('[data-testid="messenger_lbl_ours"] .ol-text-message[aria-hidden="true"]').allInnerTexts().catch(() => []);
+  // The bot types in bursts; a turn is over once the transcript has been still for 5 s.
+  const settled = async () => {
+    let last = -1, still = 0;
+    for (let i = 0; i < 30 && still < 5; i++) { await page.waitForTimeout(1000); const n = (await botMessages()).join('').length; still = n === last ? still + 1 : 0; last = n; }
+    return botMessages();
+  };
+
+  await w.locator('button[aria-label="Close widget chat"]').click({ timeout: 3000 }).catch(() => {});
+  await page.locator('a.apply-button, a:has-text("Apply Now"), button:has-text("Apply Now")').first().click({ timeout: 8000 }).catch(() => {});
+  await ctx.log?.('chat-bot application (Paradox): answering the assistant one question at a time');
+
+  let answered = 0, idle = 0, lastAsked = '', termsDone = false;
+  for (let turn = 0; turn < MAX_CHAT_TURNS; turn++) {
+    const msgs = await settled();
+    // A returning visitor gets the earlier conversation back; only its last message is pending.
+    if (turn === 0) answered = Math.max(0, msgs.length - 1);
+    const pause = await waitForHuman(page, ctx, await detectPauseRaw(page));
+    if (isCaptcha(pause)) return blocked(pause);
+
+    const terms = w.getByText('Review Terms').first();
+    // Once only: the "Review Terms" card stays in the transcript after it has been accepted.
+    if (!termsDone && /terms/i.test(msgs.at(-1) || '') && (await terms.isVisible().catch(() => false))) {
+      termsDone = true;
+      await terms.click().catch(() => {});
+      await w.locator('[role=dialog] button:has-text("Accept")').click({ timeout: 8000 }).catch(() => {});
+      allFields.push({ name: 'Terms of Use', value: 'Accepted', confidence: 'green' });
+      answered = msgs.length; // the greeting asked for the Terms; it is not a question to answer
+      continue;
+    }
+
+    const fresh = msgs.slice(answered).join(' ');
+    if (CHAT_DONE.test(fresh)) { await takeShot(page, appRef, screenshots); return { status: 'submitted', confirmation: msgs.at(-1).slice(0, 300), portalUrl: page.url() }; }
+    const question = chatQuestion(fresh);
+    if (!question) { if (++idle >= 3) return blocked(`chat stalled after: ${(msgs.at(-1) || 'no message').slice(0, 160)}`); continue; }
+    if (question === lastAsked) return blocked(`the assistant did not accept the answer to: ${question.slice(0, 160)}`);
+    idle = 0; lastAsked = question; answered = msgs.length;
+
+    let field;
+    const upload = w.locator('input[type=file]:not([accept^="video"])').first();
+    // Quick replies belong to the newest turn only; older cards ("Review Terms") stay in the transcript.
+    const lastTurn = w.locator('.me-messages__inner [role=listitem]').last();
+    // Two kinds of reply controls: "select one" cards inside the newest turn, and a quick-reply
+    // bar (Yes / No) that sits under the transcript, outside it.
+    const choices = w.locator('[data-testid="widget_convo"]').locator(':is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible');
+    const texts = async (loc) => (await loc.allInnerTexts().catch(() => [])).map((t) => t.trim()).filter((t) => t && !/^(review terms|done|view)$/i.test(t));
+    const inTranscript = new Set(await texts(w.locator('.me-messages__inner :is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible')));
+    const options = [...new Set([...(await texts(lastTurn.locator(':is(button, [role=button], [role=option], [role=radio], [role=checkbox]):visible'))), ...(await texts(choices)).filter((t) => !inTranscript.has(t))])];
+    if (/resume|r\u00e9sum\u00e9|\bcv\b/i.test(question) && (await upload.count().catch(() => 0))) {
+      await upload.setInputFiles(docs.resumePath);
+      field = { name: question, value: path.basename(docs.resumePath), confidence: 'green' };
+    } else {
+      const { value, confidence } = await getAnswer(ctx, question, options.length ? options : undefined);
+      if (!value || confidence === 'red') {
+        const gap = { name: question, value: '', confidence: 'red' };
+        allFields.push(gap); await recordFields(appRef, [gap]);
+        return blocked(`no confident answer for the assistant's question: ${question.slice(0, 160)}`);
+      }
+      if (options.includes(value)) {
+        await choices.getByText(value, { exact: true }).last().click();
+        await lastTurn.locator('[data-testid="select_list_btn_submit"]:not([disabled])').click({ timeout: 3000 }).catch(() => {}); // "Please select one" cards confirm with Done
+      }
+      else {
+        await w.locator('#widget_composer_input').fill(value);
+        await w.locator('button.send-message-btn').click();
+      }
+      field = { name: question, value, confidence };
+    }
+    allFields.push(field); await recordFields(appRef, [field]);
+    await ctx.log?.(`assistant: ${question.slice(0, 120)} -> ${field.value.slice(0, 60)}`);
+    if (turn % 6 === 5) await takeShot(page, appRef, screenshots);
+  }
+  return blocked('chat exceeded the maximum number of turns');
+}
+
 async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   // Verify the posting on the page we were sent to, before clicking anything on it.
   await settle(page);
   const wrong = await landedOnDifferentPosting(page, ctx.job);
   if (wrong) return { status: 'blocked', error: `landed on a different posting: ${wrong}`, portalUrl: page.url() };
+  if (await page.locator('apply-widget').count().catch(() => 0)) return handleParadoxChat(page, ctx, docs, appRef, screenshots, allFields);
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
-    const pause = await detectPause(page, ctx);
-    if (pause) return { status: 'blocked', error: pause };
+    let pause = await detectPause(page, ctx);
+    // A CAPTCHA beside a form's Submit is left for last in a visible run: its token expires about
+    // two minutes after it is solved, so the form is filled first. A full-page challenge (no
+    // Submit/Next on the page) has to be cleared before anything else.
+    const captchaInForm = ctx.headed && isCaptcha(pause) && !!(await findByText(page, [...SUBMIT_TEXTS, ...NEXT_TEXTS]));
+    if (!captchaInForm) pause = await waitForHuman(page, ctx, pause);
+    if (pause && !captchaInForm) return { status: 'blocked', error: pause };
 
     if (/workday/i.test(host)) {
       const acct = await ensureWorkdayAccount(page, page, ctx, host, docs.email);
@@ -708,7 +849,7 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
 
-    const submitBtn = await findByText(page, ['Submit Application', 'Submit application', 'Submit', 'Send Application']);
+    const submitBtn = await findByText(page, SUBMIT_TEXTS);
     if (submitBtn) {
       const invalid = await invalidRequired(page);
       if (invalid.length) {
@@ -723,7 +864,9 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
       if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
       return { status: 'submitted', confirmation: result.confirmation, portalUrl: page.url() };
     }
-    const nextTxt = await clickByText(page, page, ['Next', 'Continue', 'Save and Continue', 'Save & Continue']);
+    const stillNext = captchaInForm && (await waitForHuman(page, ctx, pause));
+    if (stillNext) return { status: 'blocked', error: stillNext, portalUrl: page.url() };
+    const nextTxt = await clickByText(page, page, NEXT_TEXTS);
     if (!nextTxt) return { status: 'blocked', error: 'no Next/Submit control found; may need manual completion', portalUrl: page.url() };
     await page.waitForTimeout(1200);
   }
@@ -752,6 +895,7 @@ export async function applyToJob({ db, uid, log }, payload) {
     const jobSnap = await userRef.collection('jobs').doc(jobId).get();
     if (!jobSnap.exists) throw new Error(`job ${jobId} not found`);
     const job = jobSnap.data();
+    if (!(job.score >= MIN_APPLY_SCORE)) throw new Error(`match score ${job.score ?? 'unknown'} is below ${MIN_APPLY_SCORE}; not applying`);
 
     const profileSnap = await userRef.collection('profile').doc('profile').get();
     const profile = profileSnap.exists ? profileSnap.data() : emptyProfile();
@@ -789,21 +933,27 @@ export async function applyToJob({ db, uid, log }, payload) {
       email: docs.email,
     });
 
-    const applyUrl = pickApplyUrl(job);
-    if (!applyUrl) throw new Error('job has no apply URL');
+    const urls = applyUrls(job);
+    if (!urls.length) throw new Error('job has no apply URL');
 
-    const ctx = { db, uid, profile, settings, job, autoSubmit, log: appendLog, startedAt: Date.now(), _requiredGap: false };
+    const ctx = { db, uid, profile, settings, job, autoSubmit, headed: !!payload.headed, log: appendLog, startedAt: Date.now(), _requiredGap: false };
     const screenshots = [];
     const allFields = [];
 
-    const outcome = await withBrowser(async (context) => {
+    const tryUrl = async (context, applyUrl) => {
       const page = await context.newPage();
-      const res = await page.goto(applyUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      const status = res ? res.status() : 0;
+      const res = await page.goto(applyUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => null);
+      if (!res) return { status: 'blocked', error: 'apply page did not load', tryNext: true };
+      const status = res.status();
       const html = await page.content().catch(() => '');
-      if (status >= 400) return { status: 'blocked', error: `HTTP ${status} loading apply page` };
+      if (status >= 400) return { status: 'blocked', error: `HTTP ${status} loading apply page`, tryNext: true };
       if (looksBlocked({ url: page.url(), title: await page.title().catch(() => ''), html })) {
-        return { status: 'blocked', error: `challenge or login wall at ${page.url()}` };
+        // Full-page challenge. Headless: report it (needs_human if no other source works).
+        // Visible run: the user clears it in the window, then the agent carries on.
+        const wall = `captcha detected (challenge page at ${page.url()})`;
+        const still = ctx.headed ? await waitForHuman(page, ctx, wall) : wall;
+        if (still) return { status: 'blocked', error: still, tryNext: true };
+        await settle(page);
       }
       await appRef.update({ portalUrl: page.url() }).catch(() => {});
       await takeShot(page, appRef, screenshots);
@@ -812,7 +962,20 @@ export async function applyToJob({ db, uid, log }, payload) {
       if (host.includes('linkedin.com')) return handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields);
       if (host.includes('ziprecruiter.com')) return handleZipRecruiter(page, ctx, docs, appRef, screenshots, allFields);
       return handleGeneric(page, ctx, docs, appRef, screenshots, allFields);
-    });
+    };
+
+    const outcome = await withBrowser(async (context) => {
+      let last;
+      for (const applyUrl of urls) {
+        // Only a page that failed to load moves on; an error after a form was touched must never
+        // re-apply through another board.
+        last = await tryUrl(context, applyUrl).catch((err) => ({ status: 'blocked', error: err.message.split('\n')[0] }));
+        const wrongPlace = last.tryNext || /^landed on a different posting/.test(last.error || '');
+        if (last.status !== 'blocked' || !wrongPlace) return last;
+        await appendLog(`${hostOf(applyUrl)}: ${last.error}${applyUrl === urls.at(-1) ? '' : '; trying the next source'}`);
+      }
+      return last;
+    }, { headed: ctx.headed });
 
     if (outcome.status === 'submitted') {
       await appRef.update({
@@ -826,8 +989,11 @@ export async function applyToJob({ db, uid, log }, payload) {
       await appRef.update({ status: 'blocked', error: 'autoSubmit is off; form filled and ready for manual review', portalUrl: outcome.portalUrl || null });
       await appendLog('ready to submit (autoSubmit off, not pressing submit)');
     } else {
-      await appRef.update({ status: 'blocked', error: outcome.error || 'blocked', portalUrl: outcome.portalUrl || null });
-      await appendLog(`blocked: ${outcome.error || 'unknown reason'}`);
+      // A CAPTCHA in a headless run is the user's to solve: the dashboard offers a visible rerun.
+      const status = isCaptcha(outcome.error) && !ctx.headed ? 'needs_human' : 'blocked';
+      await appRef.update({ status, error: outcome.error || 'blocked', portalUrl: outcome.portalUrl || null });
+      await appendLog(`${status}: ${outcome.error || 'unknown reason'}`);
+      return { applicationId: appRef.id, status, confirmation: null };
     }
 
     return { applicationId: appRef.id, status: outcome.status === 'submitted' ? 'submitted' : 'blocked', confirmation: outcome.confirmation || null };
@@ -845,8 +1011,8 @@ export async function applyBatch({ db, uid, log }, payload = {}) {
 
   let jobIds = payload.jobIds;
   if (!jobIds || !jobIds.length) {
-    const snap = await userRef.collection('jobs').where('status', '==', 'saved').orderBy('rank', 'asc').limit(limit).get();
-    jobIds = snap.docs.map((d) => d.id);
+    const snap = await userRef.collection('jobs').where('status', '==', 'saved').orderBy('rank', 'asc').get();
+    jobIds = snap.docs.filter((d) => d.data().score >= MIN_APPLY_SCORE).slice(0, limit).map((d) => d.id);
   } else {
     jobIds = jobIds.slice(0, limit);
   }
@@ -873,7 +1039,11 @@ export async function applyBatch({ db, uid, log }, payload = {}) {
     }
   }
 
+  const needsHuman = results.filter((r) => r.status === 'needs_human').length;
+  if (needsHuman) notify(`${needsHuman} application(s) stopped at a CAPTCHA. Open Applications and press Solve CAPTCHA when you are at the Mac.`);
+
   return {
+    needsHuman,
     total: jobIds.length,
     submitted: results.filter((r) => r.status === 'submitted').length,
     blocked: results.filter((r) => r.status === 'blocked').length,

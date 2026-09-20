@@ -51,3 +51,42 @@ test('isPageFurniture: real application fields are kept, including Workday "Sear
   assert.equal(isPageFurniture(node({ type: 'email', labels: ['Email'], form: { id: 'application-form', action: '/apply' } })), false);
   assert.equal(isPageFurniture(node({ attrs: { placeholder: 'Search', 'data-automation-id': 'searchBox' } })), false);
 });
+
+test('applyUrls: LinkedIn first, every source once, job-level URLs last', async () => {
+  const { applyUrls } = await import('../apply/agent.js');
+  const job = { sources: [{ name: 'ziprecruiter', url: 'https://zr/1' }, { name: 'linkedin', applyUrl: 'https://li/1', url: 'https://li/view' }, { name: 'glassdoor', url: 'https://zr/1' }], url: 'https://job/1' };
+  assert.deepEqual(applyUrls(job), ['https://li/1', 'https://zr/1', 'https://job/1']);
+  assert.deepEqual(applyUrls({}), []);
+});
+
+// Real browser: a visible reCAPTCHA frame blocks until its response token is filled in, which is
+// what a user solving it does. Headless here; "headed" only switches the waiting logic on.
+test('waitForHuman: waits while the CAPTCHA is unsolved, continues once the token appears', async () => {
+  const { chromium } = await import('playwright');
+  const { waitForHuman, detectPauseRaw } = await import('../apply/agent.js');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.route('**/recaptcha/**', (r) => r.fulfill({ contentType: 'text/html', body: '<p>checkbox</p>' }));
+    await page.setContent(`<form><iframe src="https://www.google.com/recaptcha/api2/anchor?k=x" width="304" height="78"></iframe>
+      <textarea name="g-recaptcha-response" style="display:none"></textarea><button>Submit</button></form>
+      <script>setTimeout(() => { document.querySelector('textarea').value = 'x'.repeat(400) }, 4000)</script>`);
+    const pause = await detectPauseRaw(page);
+    assert.equal(pause, 'captcha detected (recaptcha)');
+    const logs = [];
+    const ctx = { headed: false, job: { title: 'T', company: 'C' }, log: async (m) => logs.push(m) };
+    assert.equal(await waitForHuman(page, ctx, pause), pause, 'a headless run never waits');
+    ctx.headed = true;
+    assert.equal(await waitForHuman(page, ctx, pause), null);
+    assert.ok(logs.some((m) => /solved by the user/.test(m)));
+  } finally {
+    await browser.close();
+  }
+});
+
+test('chatQuestion: pleasantries are dropped, statements are not questions', async () => {
+  const { chatQuestion } = await import('../apply/agent.js');
+  assert.equal(chatQuestion('Thanks for accepting our Terms of Use. What is your first and last name?'), 'What is your first and last name?');
+  assert.equal(chatQuestion('Great, thanks Nirupam!'), '');
+  assert.equal(chatQuestion('Got it. Please upload your resume.'), 'Please upload your resume.');
+});

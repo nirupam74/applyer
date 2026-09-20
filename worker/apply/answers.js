@@ -48,11 +48,20 @@ export function yearsOfExperience(profile) {
 // authorization/sponsorship (before the generic "country" catch-all below them),
 // then education/demographics, then broad location/address last.
 const RULES = [
+  // Chat-bots ask whether to START an optional diversity survey ("Would you like to share?").
+  // Declined: it is voluntary, unused in screening, and opens a run of extra questions. First, so
+  // the gender/ethnicity rules below do not claim the question.
+  { re: /voluntar(y|ily).{0,200}would you like to share|would you like to (share|self.?identify)/i, get: () => 'No' },
+  // A chat-bot's closing check of the answers this agent just gave; it only runs with autoSubmit on.
+  { re: /is all (of )?the information.{0,40}correct/i, get: () => 'Yes' },
   { re: /email/i, get: (p, s) => s.email || p.personal?.email },
-  { re: /phone|mobile|telephone/i, get: (p) => p.personal?.phone },
+  // Not "Phone Extension" / "Phone Device Type": a live Workday run put the number in the extension box.
+  { re: /^(?!.*\b(extension|ext|device|type)\b).*(phone|mobile|telephone)/i, get: (p) => p.personal?.phone },
+  { re: /first (and|&|\/) ?last name/i, get: (p) => p.personal?.name }, // before the last-name rule, which it also matches
   { re: /first name|given name/i, get: (p) => firstOf(p.personal?.name) },
   { re: /last name|family name|surname/i, get: (p) => lastOf(p.personal?.name) },
   { re: /full name|your name|legal name|^name$/i, get: (p) => p.personal?.name },
+  { re: /prefer.{0,30}contact|contact.{0,30}prefer|preferred (method|way) of (contact|communication)/i, get: () => 'Email Only' },
   { re: /linkedin/i, get: (p) => p.personal?.linkedin },
   { re: /portfolio|personal site|website/i, get: (p) => p.personal?.portfolio || p.personal?.website },
   {
