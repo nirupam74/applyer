@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { postingMatches, isPageFurniture } from '../apply/agent.js';
+import { postingMatches, isPageFurniture, lazyDocs, roleKey, nationalDigits } from '../apply/agent.js';
 
 const intern = { title: 'Digital Marketing Intern', company: 'RBC' };
 
@@ -89,4 +89,26 @@ test('chatQuestion: pleasantries are dropped, statements are not questions', asy
   assert.equal(chatQuestion('Thanks for accepting our Terms of Use. What is your first and last name?'), 'What is your first and last name?');
   assert.equal(chatQuestion('Great, thanks Nirupam!'), '');
   assert.equal(chatQuestion('Got it. Please upload your resume.'), 'Please upload your resume.');
+});
+
+test('lazyDocs: nothing is prepared until a form asks for files, and then only once', async () => {
+  let loads = 0;
+  const docs = lazyDocs('a@b.ca', async () => { loads++; return { resumePath: '/tmp/r.pdf', coverPath: '/tmp/c.pdf' }; });
+  assert.equal(docs.email, 'a@b.ca');
+  assert.equal(loads, 0);
+  await Promise.all([docs.ready(), docs.ready()]);
+  assert.equal(loads, 1);
+  assert.equal(docs.resumePath, '/tmp/r.pdf');
+});
+
+test('roleKey: the same opening under another city spelling is one role', () => {
+  const a = { company: 'DULCEDO Management', title: 'Digital Marketing Intern', location: 'Greater Toronto Area, Canada' };
+  assert.equal(roleKey(a), roleKey({ ...a, location: 'Toronto, Ontario, Canada' }));
+  assert.notEqual(roleKey(a), roleKey({ ...a, title: 'Social Media Intern' }));
+});
+
+test('nationalDigits: the number a form with its own country-code box accepts', () => {
+  assert.equal(nationalDigits('+1 (647) 642-3609'), '6476423609');
+  assert.equal(nationalDigits('647-642-3609'), '6476423609');
+  assert.equal(nationalDigits('+44 20 7946 0958'), '442079460958');
 });

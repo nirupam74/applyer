@@ -5,8 +5,9 @@ import { promises as fsp } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { withBrowser, looksBlocked, sleep } from '../sources/browser.js';
 import { emptyProfile } from '../resume/extract.js';
+import { dedupKey } from '../rank.js';
 import { getAnswer } from './answers.js';
-import { prepareDocuments } from './documents.js';
+import { prepareDocuments, resolveApplicationEmail } from './documents.js';
 import { readVerificationCode } from './mail.js';
 
 const FieldValue = admin.firestore.FieldValue;
@@ -14,7 +15,7 @@ const FieldValue = admin.firestore.FieldValue;
 const MAX_SCREENSHOTS = 6;
 const MAX_SCREENSHOT_BYTES = 300 * 1024;
 const MAX_STEPS = 12;
-export const MIN_APPLY_SCORE = 70; // never apply below this match score
+export const MIN_APPLY_SCORE = 80; // never apply below this match score
 const HUMAN_WAIT_MS = 10 * 60e3;
 
 // ---- small page helpers -----------------------------------------------------
@@ -194,12 +195,29 @@ async function fillTextInputs(root, ctx, out) {
       else await el.fill(value).catch(() => {});
       el._lastTyped = value;
       await pickSuggestion(el);
-      out.push({ name: label, value, confidence });
+      out.push({ name: label, value: await acceptedPhone(el, label, value), confidence });
     } else if (await isRequired(el)) {
       out.push({ name: label, value: '', confidence: 'red' });
       ctx._requiredGap = true;
     }
   }
+}
+
+// "+1 (647) 642-3609" -> "6476423609"
+export const nationalDigits = (phone) => String(phone).replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+
+// Forms with their own country-code control (Phenom: Manulife, RBC) reject "+1 (647) ..." and
+// want the national number. The field says so itself: leave it and read aria-invalid. A field
+// left invalid is never refilled (it is not empty), so Next failed for all twelve rounds.
+async function acceptedPhone(el, label, value) {
+  if (!/phone|mobile|\btel/i.test(label) || nationalDigits(value).length < 10) return value;
+  await el.evaluate((e) => e.blur()).catch(() => {});
+  await new Promise((r) => setTimeout(r, 600));
+  if ((await el.getAttribute('aria-invalid').catch(() => null)) !== 'true') return value;
+  const digits = nationalDigits(value);
+  await el.fill(digits).catch(() => {});
+  await el.evaluate((e) => e.blur()).catch(() => {});
+  return digits;
 }
 
 // Autocomplete inputs (Lever location, Greenhouse school, Workday typeahead) only validate
@@ -389,7 +407,9 @@ async function fillCheckboxes(root, ctx, out) {
 
 async function uploadFiles(root, docs, out) {
   const inputs = await root.$$('input[type=file]');
-  const files = [docs.resumePath, docs.coverPath].filter(Boolean);
+  if (!inputs.length) return;
+  await docs.ready();
+  const files =[docs.resumePath, docs.coverPath].filter(Boolean);
   for (let i = 0; i < inputs.length && i < files.length; i++) {
     try {
       await inputs[i].setInputFiles(files[i]);
@@ -467,6 +487,10 @@ async function clickByText(page, root, texts) {
   return null;
 }
 
+const stepSignature = (page) => page.evaluate(() => `${location.href}|${[...document.querySelectorAll('h1, h2, h3, legend')].filter((h) => h.offsetParent).map((h) => h.innerText.trim()).join('|').slice(0, 400)}`).catch(() => page.url());
+
+const visibleErrors = (page) => page.evaluate(() => [...new Set([...document.querySelectorAll('[role=alert], [class*="error" i], [id*="error" i]')].filter((e) => e.offsetParent && !e.querySelector('input, select, textarea')).map((e) => e.innerText.trim()).filter((t) => t && t.length < 160))].slice(0, 3).join(' / ')).catch(() => '');
+
 // ---- Workday account creation ----------------------------------------------
 
 function genPassword(len = 20) {
@@ -541,6 +565,14 @@ async function recordFields(appRef, fields) {
 export function applyUrls(job) {
   const sources = [...(job.sources || [])].sort((a, b) => (b.name === 'linkedin') - (a.name === 'linkedin'));
   return [...new Set([...sources.map((s) => s.applyUrl || s.url), job.applyUrl, job.url].filter(Boolean))];
+}
+
+// Documents are made on first use. Most blocks (wrong posting, no Apply button, CAPTCHA wall)
+// happen before any upload, and tailoring costs minutes of LLM time per job.
+export function lazyDocs(email, load) {
+  let pending;
+  const docs = { email, ready: () => (pending ||= load().then((made) => Object.assign(docs, made))) };
+  return docs;
 }
 
 // Reuse a previous attempt's documents for this job when they still exist on disk, so a retry
@@ -661,6 +693,14 @@ async function handleZipRecruiter(page, ctx, docs, appRef, screenshots, allField
 // (Loblaw included) open the real form in a new tab when that button is clicked. Do this once,
 // before looking for Next/Submit controls, so the loop below isn't just staring at a job posting.
 async function revealApplyForm(page) {
+  const popup = await clickApply(page);
+  // Workday answers Apply with a chooser: Autofill with Resume / Apply Manually / Use My Last Application.
+  const manual = (popup || page).locator('[data-automation-id="applyManually"], a:has-text("Apply Manually"), button:has-text("Apply Manually")').first();
+  if (await manual.isVisible().catch(() => false)) { await manual.click().catch(() => {}); await (popup || page).waitForTimeout(1500); }
+  return popup;
+}
+
+async function clickApply(page) {
   for (const t of ['Apply Now', 'Apply for this job', 'Apply for this position', 'Apply']) {
     const btn = page.locator(`button:has-text("${t}"), a:has-text("${t}")`).first();
     if (await btn.count().catch(() => 0)) {
@@ -816,6 +856,7 @@ async function handleParadoxChat(page, ctx, docs, appRef, screenshots, allFields
     const wantsDate = (await datePicker.count().catch(() => 0)) > 0;
     if (!wantsDate && !options.length && (await composer.isDisabled().catch(() => false))) return blocked(`the assistant wants a choice this agent cannot see for: ${question.slice(0, 160)}`);
     if (/resume|r\u00e9sum\u00e9|\bcv\b/i.test(question) && (await upload.count().catch(() => 0))) {
+      await docs.ready();
       await upload.setInputFiles(docs.resumePath);
       field = { name: question, value: path.basename(docs.resumePath), confidence: 'green' };
     } else {
@@ -860,6 +901,7 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
+  let lastStep = null;
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
     let pause = await detectPause(page, ctx);
@@ -881,6 +923,15 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
     allFields.push(...fields);
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
+
+    // Same step as last round and nothing left to fill: Next was refused. Say why now instead of
+    // pressing it ten more times (a rejected phone format cost 9 minutes on Manulife).
+    const thisStep = await stepSignature(page);
+    if (thisStep === lastStep && !fields.some((f) => f.value)) {
+      const why = await visibleErrors(page);
+      return { status: 'blocked', error: `the form did not move on${why ? `: ${why}` : ' (no error shown)'}`, portalUrl: page.url() };
+    }
+    lastStep = thisStep;
 
     const submitBtn = await findByText(page, SUBMIT_TEXTS);
     if (submitBtn) {
@@ -944,34 +995,23 @@ export async function applyToJob({ db, uid, log }, payload) {
     const settings = settingsSnap.exists ? settingsSnap.data() : {};
     const autoSubmit = typeof payload.autoSubmit === 'boolean' ? payload.autoSubmit : !!settings.autoSubmit;
 
+    const email = payload.email || resolveApplicationEmail(profile, settings);
     let docs;
     if (payload.resumePath && payload.coverPath) {
-      docs = {
-        resumeVersionId: payload.resumeVersionId || null,
-        coverLetterId: payload.coverLetterId || null,
-        resumePath: payload.resumePath,
-        coverPath: payload.coverPath,
-        email: payload.email || settings.email || (profile.personal && profile.personal.email) || '',
-      };
+      const given = { resumeVersionId: payload.resumeVersionId || null, coverLetterId: payload.coverLetterId || null, resumePath: payload.resumePath, coverPath: payload.coverPath };
+      docs = lazyDocs(email, async () => given);
       await appendLog('using provided document paths (override)');
     } else {
-      docs = await findCachedDocs(userRef, jobId, profile.updatedAt);
-      if (docs) {
-        await appendLog('reusing documents from a previous attempt on this job');
-      } else {
-        await appendLog('preparing tailored resume and cover letter');
-        docs = await prepareDocuments({ db, uid, log: appendLog }, { jobId });
-      }
+      docs = lazyDocs(email, async () => {
+        let made = await findCachedDocs(userRef, jobId, profile.updatedAt);
+        await appendLog(made ? 'reusing documents from a previous attempt on this job' : 'the form takes files: preparing tailored resume and cover letter');
+        if (!made) made = await prepareDocuments({ db, uid, log: appendLog }, { jobId });
+        await appRef.update({ resumeVersionId: made.resumeVersionId, coverLetterId: made.coverLetterId, resumePath: made.resumePath, coverPath: made.coverPath });
+        return made;
+      });
     }
 
-    await appRef.update({
-      status: 'filling',
-      resumeVersionId: docs.resumeVersionId,
-      coverLetterId: docs.coverLetterId,
-      resumePath: docs.resumePath,
-      coverPath: docs.coverPath,
-      email: docs.email,
-    });
+    await appRef.update({ status: 'filling', email });
 
     const urls = applyUrls(job);
     if (!urls.length) throw new Error('job has no apply URL');
@@ -1044,6 +1084,9 @@ export async function applyToJob({ db, uid, log }, payload) {
   }
 }
 
+// Employer + title, city ignored: "Toronto" and "Greater Toronto Area" are the same opening.
+export const roleKey = (job) => dedupKey({ ...job, location: '' });
+
 // applyBatch({ db, uid, log }, { jobIds?, limit? })
 export async function applyBatch({ db, uid, log }, payload = {}) {
   const userRef = db.collection('users').doc(uid);
@@ -1058,11 +1101,18 @@ export async function applyBatch({ db, uid, log }, payload = {}) {
     jobIds = jobIds.slice(0, limit);
   }
 
+  // The same role is often listed twice (another board, another spelling of the city) under two
+  // job ids. One application per employer + title.
+  const appliedSnap = await userRef.collection('jobs').where('status', '==', 'applied').get();
+  const appliedRoles = new Set(appliedSnap.docs.map((d) => roleKey(d.data())));
+
   const results = [];
   for (const jobId of jobIds) {
     const already = await userRef.collection('applications').where('jobId', '==', jobId).where('status', '==', 'submitted').limit(1).get();
-    if (!already.empty) {
-      await log(`${jobId}: already submitted, skipping`);
+    const jobSnap = await userRef.collection('jobs').doc(jobId).get();
+    const role = jobSnap.exists ? roleKey(jobSnap.data()) : null;
+    if (!already.empty || appliedRoles.has(role)) {
+      await log(`${jobId}: already applied to this role, skipping`);
       results.push({ jobId, status: 'skipped' });
       continue;
     }
@@ -1071,6 +1121,7 @@ export async function applyBatch({ db, uid, log }, payload = {}) {
       const res = await applyToJob({ db, uid, log }, { jobId });
       results.push({ jobId, ...res });
       if (res.status === 'submitted') {
+        appliedRoles.add(role);
         await userRef.collection('jobs').doc(jobId).update({ status: 'applied', updatedAt: FieldValue.serverTimestamp() }).catch(() => {});
       }
       await log(`${jobId}: ${res.status}`);

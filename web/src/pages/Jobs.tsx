@@ -65,7 +65,7 @@ export default function Jobs() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">Jobs</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Every job found, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 70 or higher.
+            Every job found, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 80 or higher.
           </p>
         </div>
         <button

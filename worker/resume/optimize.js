@@ -103,10 +103,12 @@ export function detectProblems({ profile, originalText, structured }) {
 
 const ATS_SHAPE = `{"score": number 0-100, "problems": string[], "recommendations": string[], "improvementsMade": string[], "remainingWeaknesses": string[]}`;
 
-// optimizeResume({ profile, originalText, existingStructured, section, job }) -> { structured, ats }
+// optimizeResume({ profile, originalText, existingStructured, section, job, fitted }) -> { structured, ats }
 // job (optional): { title, company, description } - when given, the summary and experience
 // bullets are reordered/reworded to target that job, using only facts already in the profile.
-export async function optimizeResume({ profile, originalText, existingStructured, section, job }) {
+// fitted (optional): a structured resume that already fills its page limit; the result keeps its
+// size, so the page-fit loop rarely has to condense.
+export async function optimizeResume({ profile, originalText, existingStructured, section, job, fitted }) {
   if (section && !SECTIONS.includes(section)) {
     throw new Error(`Unknown section: ${section}`);
   }
@@ -140,9 +142,12 @@ export async function optimizeResume({ profile, originalText, existingStructured
 
   const shape = `{"structured": ${STRUCTURED_SHAPE}, "ats": ${ATS_SHAPE}}`;
   const prompt = [
-    'Produce a full ATS-optimized resume, structured by section, plus an ATS report. Every experience entry must carry all of its bullets from the profile, rewritten to be achievement-focused; never drop a role or a bullet. Achievements must not restate a responsibility bullet: a result belongs either in the bullet or in achievements, never both.',
+    fitted
+      ? 'Produce a full ATS-optimized resume, structured by section, plus an ATS report. It has to fit the page exactly as the LENGTH TEMPLATE does: keep every role, project and degree, the same number of bullets under each, no bullet, summary or skill line longer than its counterpart in the template, and the same number of coursework items. Choose and word the profile facts that serve the target job best; achievement-focused bullets. Achievements must not restate a responsibility bullet: a result belongs either in the bullet or in achievements, never both.'
+      : 'Produce a full ATS-optimized resume, structured by section, plus an ATS report. Every experience entry must carry all of its bullets from the profile, rewritten to be achievement-focused; never drop a role or a bullet. Achievements must not restate a responsibility bullet: a result belongs either in the bullet or in achievements, never both.',
     `Candidate profile (source of truth facts):\n${JSON.stringify(profile)}`,
     `Original resume text:\n${originalText || ''}`,
+    fitted ? `LENGTH TEMPLATE (a version of this resume that fills its page exactly; a guide to size, not to wording):\n${JSON.stringify(normalizeStructured(fitted))}` : '',
     detectedBlock,
     jobBlock,
   ].filter(Boolean).join('\n\n');

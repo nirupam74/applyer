@@ -83,35 +83,15 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
 
   const pageLimit = Number(resumeSettingsSnap.exists && resumeSettingsSnap.data().maxPages) || 1;
 
-  await log(`tailoring resume for ${job.title} at ${job.company}`);
-  const { structured, ats } = await runOptimize({
-    profile,
-    originalText: resume.text || '',
-    job: { title: job.title, company: job.company, description: job.description },
-  });
+  // A version that already fits the page is the length template. Tailoring from the raw profile
+  // overshot the page by about 13 lines every time and paid for 2-3 condensing rounds (3 minutes).
+  // ponytail: the template may itself be a tailored version; keep one canonical untailored fit if wording drifts.
+  const validFrom = profile.updatedAt?.toMillis?.() || 0;
+  const recent = await userRef.collection('resumeVersions').orderBy('createdAt', 'desc').limit(10).select('structured', 'fits', 'pageLimit', 'createdAt').get();
+  const fitted = recent.docs.map((d) => d.data()).find((v) => v.fits && v.pageLimit === pageLimit && v.structured && (v.createdAt?.toMillis?.() || 0) >= validFrom)?.structured;
 
-  const fitted = await fitToPages({ structured, profile, pageLimit, log });
-  Object.assign(structured, fitted.structured);
-
-  await log('saving tailored resume version');
-  const versionRef = userRef.collection('resumeVersions').doc();
-  await versionRef.set({
-    resumeId,
-    jobId,
-    label: `Tailored for ${job.company} ${job.title}`,
-    structured,
-    ats,
-    docxBytes: fitted.docx,
-    pdfBytes: fitted.pdf,
-    pages: fitted.pages,
-    pageLimit,
-    fits: fitted.pages <= pageLimit,
-    fileName: `${name} - Resume`,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-
-  await log('writing cover letter with LLM');
+  // The cover letter does not depend on the resume: both LLM calls run at once.
+  await log(`tailoring resume${fitted ? ' (from the last one-page fit)' : ''} and writing cover letter for ${job.title} at ${job.company}`);
   const analysis = job.analysis || {};
   const clShape = '{"paragraphs": string[] (3-4 paragraphs), "closing": string (one closing sentence before the sign-off)}';
   const clPrompt = [
@@ -121,7 +101,38 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
     `Strengths to emphasize: ${JSON.stringify(analysis.strong || [])}`,
     `Candidate advantages to emphasize: ${JSON.stringify(analysis.advantages || [])}`,
   ].join('\n\n');
-  const clOut = await ask(clPrompt, clShape);
+  const clPending = ask(clPrompt, clShape);
+  clPending.catch(() => {}); // awaited below; a tailoring error must not leave this rejection unhandled
+
+  const { structured, ats } = await runOptimize({
+    profile,
+    originalText: resume.text || '',
+    job: { title: job.title, company: job.company, description: job.description },
+    fitted,
+  });
+
+  const fit = await fitToPages({ structured, profile, pageLimit, log });
+  Object.assign(structured, fit.structured);
+
+  await log('saving tailored resume version');
+  const versionRef = userRef.collection('resumeVersions').doc();
+  await versionRef.set({
+    resumeId,
+    jobId,
+    label: `Tailored for ${job.company} ${job.title}`,
+    structured,
+    ats,
+    docxBytes: fit.docx,
+    pdfBytes: fit.pdf,
+    pages: fit.pages,
+    pageLimit,
+    fits: fit.pages <= pageLimit,
+    fileName: `${name} - Resume`,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const clOut = await clPending;
   const paragraphs = coerceStringArray(clOut.paragraphs);
   const closing = coerceString(clOut.closing);
 
@@ -148,7 +159,7 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   await fs.mkdir(dir, { recursive: true });
   const resumePath = path.join(dir, `${sanitizeFileName(`${name} - Resume`)}.pdf`);
   const coverPath = path.join(dir, `${sanitizeFileName(coverFileName)}.pdf`);
-  await fs.writeFile(resumePath, fitted.pdf);
+  await fs.writeFile(resumePath, fit.pdf);
   await fs.writeFile(coverPath, clPdf);
 
   return { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, resumePath, coverPath, email: applicationEmail };
