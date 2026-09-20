@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useUser } from '../auth'
 import TaskStatus from '../components/TaskStatus'
 import { SOURCES, SOURCE_LABEL, daysAgo, postedLabel, useJobs, useSourceRuns, type JobRow } from '../lib/jobs'
-import { enqueueTask } from '../lib/tasks'
+import { enqueueTask, useActiveTask } from '../lib/tasks'
 
 const MIN_SCORE = 70 // weaker matches are not shown; the agent applies at 80 (worker MIN_APPLY_SCORE)
 
@@ -23,6 +23,7 @@ export default function Jobs() {
   const jobs = useJobs(uid)
   const runs = useSourceRuns(uid)
   const [taskId, setTaskId] = useState<string | null>(null)
+  const activeId = useActiveTask(uid, ['searchJobs', 'prepareBatch'])
 
   const [q, setQ] = useState('')
   const [minScore, setMinScore] = useState(MIN_SCORE)
@@ -78,16 +79,18 @@ export default function Jobs() {
           <button
             type="button"
             onClick={prepareAll}
-            className="rounded-lg border border-[var(--border)] px-5 py-2.5 text-sm font-semibold text-[var(--text)] hover:bg-[var(--bg-sunken)]"
+            disabled={!!activeId}
+            className="rounded-lg border border-[var(--border)] px-5 py-2.5 text-sm font-semibold text-[var(--text)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
           >
             Prepare documents
           </button>
           <button
             type="button"
             onClick={searchNow}
-            className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
+            disabled={!!activeId}
+            className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] disabled:opacity-50"
           >
-            Search now
+            {activeId ? 'Working...' : 'Search now'}
           </button>
         </div>
       </div>
@@ -107,7 +110,7 @@ export default function Jobs() {
         })}
       </div>
 
-      {taskId && <TaskStatus uid={uid} taskId={taskId} />}
+      {(activeId || taskId) && <TaskStatus uid={uid} taskId={(activeId || taskId)!} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <input

@@ -2,10 +2,11 @@ import admin from 'firebase-admin';
 import { emptyProfile } from './resume/extract.js';
 import { sources } from './sources/index.js';
 import { sleep, withBrowser } from './sources/browser.js';
-import { analyzeBatch, buildQueries, finalScore, heuristicScore, jobId, mergeJob } from './rank.js';
+import { analyzeBatch, buildQueries, finalScore, heuristicScore, jobId, mergeJob, prefsKey } from './rank.js';
 
 const FieldValue = admin.firestore.FieldValue;
 const TOP_N = 100;
+const DETAIL_ORDER = ['linkedin', 'ziprecruiter', 'indeed', 'glassdoor'];
 const BLOCKED_COOLDOWN_MS = 24 * 3600e3; // a source that was blocked is left alone for a day
 
 // searchJobs payload { sources?: string[], pagesPerQuery?, detailLimit?, analyzeLimit? }
@@ -38,6 +39,7 @@ export async function searchJobs({ db, uid, log }, payload) {
       let status = 'ok';
       let message = '';
       let count = 0;
+      let failures = 0;
       outer: for (const query of titles) {
         for (let page = 0; page < pagesPerQuery; page++) {
           let res;
@@ -55,11 +57,17 @@ export async function searchJobs({ db, uid, log }, payload) {
             status = res.status;
             message = res.message || '';
             await log(`${name}: ${status} on "${query}" p${page + 1}: ${message}`);
-            break outer;
+            if (status === 'blocked') break outer;
+            failures++; // a failed page (Glassdoor HTTP 502) ends this query, not the source
+            break;
           }
           if (res.jobs.length < 5) break; // last page for this query
           await sleep(1200 + Math.random() * 800);
         }
+      }
+      if (status !== 'blocked') {
+        status = failures && !count ? 'error' : 'ok';
+        message = failures ? `${failures} of ${titles.length} queries failed, last: ${message}` : '';
       }
       runs[name] = { status, message, jobsFound: count };
       await runRef.set({ status, message, jobsFound: count, finishedAt: FieldValue.serverTimestamp() }, { merge: true });
@@ -81,22 +89,22 @@ export async function searchJobs({ db, uid, log }, payload) {
     for (const job of jobs.values()) job.heuristic = heuristicScore(job, profile);
     const ordered = [...jobs.values()].sort((a, b) => b.heuristic - a.heuristic);
     const detailLimit = payload.detailLimit || 120;
-    const needDetails = ordered.slice(0, detailLimit).filter((j) => !j.description && j.externalIds && !j.detailsBlocked);
+    const needDetails = ordered.slice(0, detailLimit).filter((j) => !j.description && j.externalIds);
+    const blockedSources = new Set();
     await log(`fetching descriptions for ${needDetails.length} listings`);
     let fetched = 0;
-    for (const job of needDetails) {
-      if (job.detailsBlocked) continue;
-      const [name, externalId] = Object.entries(job.externalIds)[0];
+    // Every board the job was seen on is tried, LinkedIn first (its pages are the ones that open).
+    for (const job of needDetails) for (const name of DETAIL_ORDER) {
+      const externalId = job.externalIds[name];
       const adapter = sources[name];
-      if (!adapter || !adapter.details) continue;
+      if (job.description || !externalId || blockedSources.has(name) || !adapter || !adapter.details) continue;
       try {
         const src = job.sources.find((s) => s.name === name) || {};
         const tmp = { externalId, url: src.url, applyUrl: src.applyUrl, description: '' };
         await adapter.details(tmp, context);
         if (tmp.detailsBlocked) {
-          job.detailsBlocked = true;
+          blockedSources.add(name);
           await log(`${name}: blocked while fetching details, stopping detail fetches for this source`);
-          needDetails.forEach((j) => { if (Object.keys(j.externalIds)[0] === name) j.detailsBlocked = true; });
           continue;
         }
         if (tmp.description) job.description = tmp.description;
@@ -117,7 +125,8 @@ export async function searchJobs({ db, uid, log }, payload) {
   // 4. LLM analysis in batches of 10 for the top candidates without one.
   const analyzeLimit = payload.analyzeLimit || 120;
   const ranked = [...jobs.values()].sort((a, b) => b.heuristic - a.heuristic);
-  const toAnalyze = ranked.slice(0, analyzeLimit).filter((j) => !j.analysis);
+  const key = prefsKey(profile);
+  const toAnalyze = ranked.slice(0, analyzeLimit).filter((j) => !j.analysis || (j.analysis.prefsKey && j.analysis.prefsKey !== key));
   await log(`analyzing ${toAnalyze.length} listings with the LLM in batches of 10`);
   for (let i = 0; i < toAnalyze.length; i += 10) {
     const batch = toAnalyze.slice(i, i + 10);
@@ -127,7 +136,7 @@ export async function searchJobs({ db, uid, log }, payload) {
       for (const job of batch) {
         const a = results[job.id];
         if (!a) continue;
-        job.analysis = a;
+        job.analysis = { ...a, prefsKey: key };
         job.matchPct = a.matchPct;
         got++;
       }

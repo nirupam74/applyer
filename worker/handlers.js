@@ -215,3 +215,14 @@ async function refill({ attempt, structured: original, profile, pageLimit, log, 
   await log(`refilled ${added} item(s); ${best.pages} page(s)`);
   return best;
 }
+
+// Same type + payload as a task that was still unfinished when this one was created (a second
+// press of Search now while the first search runs): nothing new to do.
+export function isRepeat(task, others) {
+  const made = task.createdAt?.toMillis?.() || 0;
+  const key = JSON.stringify(task.payload || {});
+  return others.some(
+    (o) => o.id !== task.id && o.type === task.type && JSON.stringify(o.payload || {}) === key &&
+      (o.createdAt?.toMillis?.() || 0) <= made && o.status !== 'failed' && (o.status !== 'done' || (o.updatedAt?.toMillis?.() || 0) > made),
+  );
+}

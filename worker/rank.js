@@ -47,24 +47,29 @@ export function mergeJob(existing, incoming) {
 }
 
 // Turns preferences into search queries. Slash alternatives become separate
-// titles ("Social Media / Content Marketing Intern" -> two queries).
+// titles ("Social Media / Content Marketing Intern" -> two queries). A trailing level
+// ("Research Technician II") is dropped: the boards match it anyway, and I / II / III are one query.
 export function buildQueries(profile) {
   const prefs = profile.preferences || {};
-  const titles = new Set();
+  const titles = new Map(); // lowercased -> as typed
+  const add = (t) => {
+    const q = t.replace(/\s+/g, ' ').replace(/\s+(i{1,3}|iv|v|[1-5])$/i, '').trim();
+    if (q && !titles.has(q.toLowerCase())) titles.set(q.toLowerCase(), q);
+  };
   for (const raw of prefs.titles || []) {
     const t = String(raw).trim();
     if (!t) continue;
     const m = t.match(/^(.*?)\s\/\s(.*?)\s(\S+(?:\s\S+)?)$/); // "A / B Rest"
     if (m) {
-      titles.add(`${m[1]} ${m[3]}`.replace(/\s+/g, ' ').trim());
-      titles.add(`${m[2]} ${m[3]}`.replace(/\s+/g, ' ').trim());
+      add(`${m[1]} ${m[3]}`);
+      add(`${m[2]} ${m[3]}`);
     } else {
-      titles.add(t);
+      add(t);
     }
   }
-  if (titles.size === 0 && profile.experience && profile.experience[0]) titles.add(profile.experience[0].title);
+  if (titles.size === 0 && profile.experience && profile.experience[0]) add(String(profile.experience[0].title || ''));
   const location = searchLocation(prefs.locations || [], profile.personal && profile.personal.location);
-  return { titles: [...titles].slice(0, 12), location };
+  return { titles: [...titles.values()].slice(0, 20), location };
 }
 
 export function searchLocation(locations, fallback) {
@@ -136,6 +141,12 @@ export function finalScore(heuristic, matchPct) {
   return Math.round(0.35 * heuristic + 0.65 * matchPct);
 }
 
+// What the LLM ranking depends on besides the resume. A stored analysis made under other
+// preferences is redone on the next search; one without a key (older data) is kept.
+export function prefsKey(profile) {
+  return createHash('sha1').update(JSON.stringify([profile.preferences || {}, profile.workAuthorization || '', profile.availability || ''])).digest('hex').slice(0, 12);
+}
+
 function profileSummary(profile) {
   const p = profile;
   return {
@@ -150,7 +161,7 @@ function profileSummary(profile) {
     publications: (p.publications || []).map((c) => String(c).slice(0, 200)),
     skills: p.skills || {},
     preferences: p.preferences || {},
-    workAuthorization: p.workAuthorization || '',
+    workAuthorization: p.workAuthorization || (p.demographics?.citizenship ? `${p.demographics.citizenship} citizen` : ''),
     availability: p.availability || '',
   };
 }

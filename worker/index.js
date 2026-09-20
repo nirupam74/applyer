@@ -2,7 +2,7 @@ import admin from 'firebase-admin';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { handlers } from './handlers.js';
+import { handlers, isRepeat } from './handlers.js';
 
 const SA_PATH = process.env.APPLYER_SA || path.join(os.homedir(), '.applyer', 'sa.json');
 
@@ -48,9 +48,13 @@ async function watchUser(uid) {
     (snapshot) => {
       for (const change of snapshot.docChanges()) {
         if (change.type === 'added' || change.type === 'modified') {
-          claimAndRun(uid, change.doc.ref).catch((err) => {
-            log(uid, `unhandled error claiming task ${change.doc.id}: ${err.message}`);
-          });
+          const run = () =>
+            claimAndRun(uid, change.doc.ref).catch((err) => {
+              log(uid, `unhandled error claiming task ${change.doc.id}: ${err.message}`);
+            });
+          // Chat replies are quick and touch nothing shared; everything else waits its turn.
+          if (change.doc.data().type === 'assistant') run();
+          else heavy = heavy.then(run);
         }
       }
     },
@@ -61,6 +65,11 @@ async function watchUser(uid) {
     }
   );
 }
+
+// One heavy task at a time for the whole worker: searches share one browser profile and document
+// tasks share one LibreOffice profile, across both members. Waiting tasks stay "queued".
+// ponytail: a single global line; split into a browser line and a document line if waiting hurts.
+let heavy = Promise.resolve();
 
 async function claimAndRun(uid, taskRef) {
   let task = null;
@@ -82,6 +91,15 @@ async function claimAndRun(uid, taskRef) {
       updatedAt: FieldValue.serverTimestamp(),
     });
   };
+
+  if (task.type !== 'assistant') {
+    const same = await taskRef.parent.where('type', '==', task.type).select('type', 'payload', 'status', 'createdAt', 'updatedAt').get();
+    if (isRepeat(task, same.docs.map((d) => ({ id: d.id, ...d.data() })))) {
+      await appendLog('skipped: the same task was already running when this one was queued');
+      await taskRef.update({ status: 'done', result: { skipped: 'duplicate' }, updatedAt: FieldValue.serverTimestamp() });
+      return;
+    }
+  }
 
   const handler = handlers[task.type];
   if (!handler) {

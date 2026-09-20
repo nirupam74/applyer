@@ -68,6 +68,7 @@ export async function details(job, context) {
   const tab = await context.newPage();
   try {
     const res = await tab.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    if (res && [403, 429].includes(res.status())) job.detailsBlocked = true; // Cloudflare wall: say so, so the search stops asking
     if (!res || res.status() >= 400) return job;
     const html = await tab.content();
     if (looksBlocked({ url: tab.url(), title: await tab.title(), html })) {

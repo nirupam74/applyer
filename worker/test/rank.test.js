@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupKey, heuristicScore, buildQueries, mergeJob, finalScore } from '../rank.js';
+import { dedupKey, heuristicScore, buildQueries, mergeJob, finalScore, prefsKey } from '../rank.js';
 
 const profile = {
   personal: { location: 'Ontario, Canada' },
@@ -60,4 +60,18 @@ test('mergeJob unions sources and keeps the longer description', () => {
 test('finalScore blends heuristic and LLM match', () => {
   assert.equal(finalScore(80, null), 80);
   assert.equal(finalScore(80, 60), 67);
+});
+
+test('buildQueries: levels and case collapse into one query, up to 20 queries', () => {
+  const titles = ['Research technician I', 'Research technician II', 'research Technician III', 'technologist I', 'Clinical Research', ...Array.from({ length: 30 }, (_, i) => 'Role ' + 'abcdefghijklmnopqrstuvwxyzABCD'[i])];
+  const q = buildQueries({ preferences: { titles, locations: ['Toronto', 'Brampton'] } });
+  assert.deepEqual(q.titles.slice(0, 3), ['Research technician', 'technologist', 'Clinical Research']);
+  assert.equal(q.titles.length, 20);
+  assert.equal(q.location, 'Toronto');
+});
+
+test('prefsKey changes with preferences, not with the rest of the profile', () => {
+  const a = { preferences: { titles: ['A'] }, personal: { name: 'x' } };
+  assert.equal(prefsKey(a), prefsKey({ ...a, personal: { name: 'y' } }));
+  assert.notEqual(prefsKey(a), prefsKey({ ...a, preferences: { titles: ['B'] } }));
 });
