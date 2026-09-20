@@ -68,6 +68,16 @@ test('buildQueries: levels and case collapse into one query, up to 20 queries', 
   assert.deepEqual(q.titles.slice(0, 3), ['Research technician', 'technologist', 'Clinical Research']);
   assert.equal(q.titles.length, 20);
   assert.equal(q.location, 'Toronto');
+  assert.deepEqual(q.locations, ['Toronto', 'Brampton']);
+  assert.deepEqual(buildQueries({ preferences: { titles: ['A'], locations: ['GTA', 'Greater Toronto Area'] } }).locations, ['Toronto, ON']);
+});
+
+test('heuristicScore: any GTA city matches a member whose cities are in the GTA', () => {
+  const now = new Date('2026-09-20');
+  const p = { preferences: { titles: ['Research Assistant'], locations: ['Brampton'] }, skills: {} };
+  const at = (location) => heuristicScore({ title: 'Research Assistant', location, postedAt: now }, p, now);
+  assert.equal(at('Markham, Ontario, Canada'), at('Brampton, ON'));
+  assert.equal(at('Markham, Ontario, Canada') - at('Ottawa, Ontario, Canada'), 8);
 });
 
 test('prefsKey changes with preferences, not with the rest of the profile', () => {

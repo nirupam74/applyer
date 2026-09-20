@@ -11,6 +11,7 @@ const CITY = { toronto: 2281069, mississauga: 2280741, montreal: 2296722, vancou
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 export const name = 'glassdoor';
+export const knowsLocation = (location) => !!CITY[slug(location).split('-')[0]];
 
 function searchUrl(query, location, page) {
   const id = CITY[slug(location).split('-')[0]];

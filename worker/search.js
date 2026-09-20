@@ -15,11 +15,11 @@ export async function searchJobs({ db, uid, log }, payload) {
   const profileSnap = await userRef.collection('profile').doc('profile').get();
   const profile = profileSnap.exists ? profileSnap.data() : emptyProfile();
 
-  const { titles, location } = buildQueries(profile);
+  const { titles, locations } = buildQueries(profile);
   if (!titles.length) throw new Error('profile has no preferred titles or experience to search from');
-  const pagesPerQuery = payload.pagesPerQuery || 2;
+  const pagesPerQuery = payload.pagesPerQuery || 3; // first location; the member's other cities get one page each
   const wanted = (payload.sources && payload.sources.length ? payload.sources : Object.keys(sources)).filter((s) => sources[s]);
-  await log(`${titles.length} queries in "${location}": ${titles.join(' | ')}`);
+  await log(`${titles.length} queries in ${locations.map((l) => `"${l}"`).join(', ')}: ${titles.join(' | ')}`);
 
   // 1. Scrape. Each source gets a run doc with status ok | blocked | error.
   const found = new Map(); // jobId -> merged job
@@ -40,8 +40,10 @@ export async function searchJobs({ db, uid, log }, payload) {
       let message = '';
       let count = 0;
       let failures = 0;
-      outer: for (const query of titles) {
-        for (let page = 0; page < pagesPerQuery; page++) {
+      outer: for (const [li, location] of locations.entries()) for (const query of titles) {
+        // A board that cannot pin this city would search the whole country instead (Glassdoor).
+        if (li > 0 && adapter.knowsLocation && !adapter.knowsLocation(location)) continue outer;
+        for (let page = 0; page < (li ? 1 : pagesPerQuery); page++) {
           let res;
           try {
             res = await adapter.search({ query, location, page }, context);
@@ -67,7 +69,7 @@ export async function searchJobs({ db, uid, log }, payload) {
       }
       if (status !== 'blocked') {
         status = failures && !count ? 'error' : 'ok';
-        message = failures ? `${failures} of ${titles.length} queries failed, last: ${message}` : '';
+        message = failures ? `${failures} queries failed, last: ${message}` : '';
       }
       runs[name] = { status, message, jobsFound: count };
       await runRef.set({ status, message, jobsFound: count, finishedAt: FieldValue.serverTimestamp() }, { merge: true });

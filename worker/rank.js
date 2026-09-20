@@ -68,8 +68,10 @@ export function buildQueries(profile) {
     }
   }
   if (titles.size === 0 && profile.experience && profile.experience[0]) add(String(profile.experience[0].title || ''));
-  const location = searchLocation(prefs.locations || [], profile.personal && profile.personal.location);
-  return { titles: [...titles.values()].slice(0, 20), location };
+  const fallback = profile.personal && profile.personal.location;
+  const locations = [...new Set((prefs.locations || []).map((l) => searchLocation([l])).filter((l) => l !== 'Canada'))].slice(0, 3);
+  if (!locations.length) locations.push(searchLocation([], fallback));
+  return { titles: [...titles.values()].slice(0, 20), location: locations[0], locations };
 }
 
 export function searchLocation(locations, fallback) {
@@ -80,6 +82,8 @@ export function searchLocation(locations, fallback) {
 }
 
 const INTERN = /\b(intern(ship)?s?|co-?op)\b/i; // not "internal" / "international"
+// Any of these counts as "in the GTA" for a member whose preferred cities are there.
+const GTA = /\b(gta|greater toronto|toronto|north york|scarborough|etobicoke|east york|mississauga|brampton|markham|vaughan|richmond hill|thornhill|oakville|burlington|milton|pickering|ajax|whitby|oshawa|newmarket|aurora|caledon)\b/;
 const SENIOR = /\b(senior|sr\.?|lead|principal|director|head of|manager|vp|chief|staff)\b/i;
 const STOP = new Set(['and', 'or', 'the', 'of', 'intern', 'internship', 'co', 'op', 'coop', 'a', 'an', 'in', 'for']);
 
@@ -114,7 +118,7 @@ export function heuristicScore(job, profile, now = new Date()) {
   const loc = squash(job.location);
   const cities = (prefs.locations || []).map((l) => squash(l.split(',')[0])).filter(Boolean);
   if (job.workMode === 'remote' && prefs.remote !== 'onsite') score += 15;
-  else if (cities.some((c) => c && loc.includes(c)) || /toronto/.test(loc) && cities.some((c) => /toronto/.test(c))) score += 15;
+  else if (cities.some((c) => c && loc.includes(c)) || (GTA.test(loc) && cities.some((c) => GTA.test(c)))) score += 15;
   else if (/ontario|\bon\b/.test(loc) && cities.length) score += 7;
   else if (!loc) score += 3;
 

@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react'
+import { onSnapshot, setDoc } from 'firebase/firestore'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useUser } from '../auth'
 import TaskStatus from '../components/TaskStatus'
 import { SOURCES, SOURCE_LABEL, daysAgo, postedLabel, useJobs, useSourceRuns, type JobRow } from '../lib/jobs'
+import { userDoc } from '../lib/paths'
 import { enqueueTask, useActiveTask } from '../lib/tasks'
 
-const MIN_SCORE = 70 // weaker matches are not shown; the agent applies at 80 (worker MIN_APPLY_SCORE)
+const MIN_SCORE = 70 // default floor of the list; each member's own choice is kept in settings/jobs.minScore
 
 const WORK_MODES = ['remote', 'hybrid', 'onsite', 'unknown'] as const
 const STATUSES = ['new', 'saved', 'dismissed', 'applied', 'interview', 'offer', 'rejected'] as const
@@ -26,7 +28,12 @@ export default function Jobs() {
   const activeId = useActiveTask(uid, ['searchJobs', 'prepareBatch'])
 
   const [q, setQ] = useState('')
-  const [minScore, setMinScore] = useState(MIN_SCORE)
+  const [minScore, setMinScoreState] = useState(MIN_SCORE)
+  useEffect(() => onSnapshot(userDoc(uid, 'settings', 'jobs'), (snap) => setMinScoreState(snap.data()?.minScore ?? MIN_SCORE)), [uid])
+  function setMinScore(value: number) {
+    setMinScoreState(value)
+    void setDoc(userDoc(uid, 'settings', 'jobs'), { minScore: value }, { merge: true })
+  }
   const [workMode, setWorkMode] = useState('')
   const [source, setSource] = useState('')
   const [status, setStatus] = useState('')
@@ -42,7 +49,7 @@ export default function Jobs() {
     return (jobs ?? []).filter((j) => {
       if (rankedOnly && j.rank == null && j.status !== 'saved') return false
       if (needle && !`${j.title} ${j.company} ${j.location}`.toLowerCase().includes(needle)) return false
-      if (!(j.score >= Math.max(minScore, MIN_SCORE))) return false
+      if (!((j.score ?? 0) >= minScore)) return false
       if (workMode && j.workMode !== workMode) return false
       if (source && !j.sources.some((s) => s.name === source)) return false
       if (status ? j.status !== status : j.status === 'dismissed') return false
@@ -72,7 +79,7 @@ export default function Jobs() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">Jobs</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Jobs scoring 70 or higher, ranked from your profile preferences and a resume-to-job analysis. Prepare documents writes a tailored resume and cover letter for every job scoring 80 or higher; you apply yourself from the job page.
+            {minScore > 0 ? `Jobs scoring ${minScore} or higher` : 'Every job found'}, ranked from your profile preferences and a resume-to-job analysis. Prepare documents writes a tailored resume and cover letter for every job scoring 80 or higher; you apply yourself from the job page.
           </p>
         </div>
         <div className="flex gap-2">
@@ -121,7 +128,7 @@ export default function Jobs() {
         />
         <label className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
           Score ≥
-          <input type="number" min={MIN_SCORE} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value) || MIN_SCORE)} className={`${select} w-16`} />
+          <input type="number" min={0} max={100} value={minScore} onChange={(e) => setMinScore(Math.max(0, Math.min(100, Number(e.target.value) || 0)))} className={`${select} w-16`} />
         </label>
         <select value={workMode} onChange={(e) => setWorkMode(e.target.value)} className={select}>
           <option value="">Any work mode</option>
