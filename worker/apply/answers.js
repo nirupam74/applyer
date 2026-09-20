@@ -154,19 +154,21 @@ async function bankMatch(db, uid, question) {
   return answer == null || String(answer).trim() === '' ? null : String(answer).trim();
 }
 
-async function saveGenerated(db, uid, question, answer) {
+// Every question the agent meets lands in the bank with the options the form offered, answered
+// or not, so the Answers page can show it and the user can pick or change the answer. An
+// existing entry is never overwritten; it only gains options it lacked.
+async function recordQuestion(db, uid, question, answer, options) {
   if (!db || !uid) return;
   const key = norm(question);
   if (!key) return;
-  await db.collection('users').doc(uid).collection('answers').add({
-    question,
-    questionKey: key,
-    answer,
-    tags: [],
-    source: 'generated',
-    approved: false,
-    createdAt: FieldValue.serverTimestamp(),
-  });
+  const opts = (options || []).map(String).slice(0, 30);
+  const col = db.collection('users').doc(uid).collection('answers');
+  const snap = await col.where('questionKey', '==', key).limit(1).get();
+  if (!snap.empty) {
+    if (opts.length && !(snap.docs[0].data().options || []).length) await snap.docs[0].ref.update({ options: opts });
+    return;
+  }
+  await col.add({ question, questionKey: key, answer: answer || '', options: opts, tags: [], source: 'generated', approved: false, createdAt: FieldValue.serverTimestamp() });
 }
 
 // ---- LLM fallback for free text / essay questions --------------------------
@@ -190,17 +192,25 @@ export async function getAnswer({ db, uid, profile, settings, job }, question, o
   const bank = await bankMatch(db, uid, question);
   if (bank) return withOptions(bank, options, 'green');
 
+  const record = (answer) => recordQuestion(db, uid, question, answer, options).catch(() => {});
+
   const rule = applyRules(profile, settings, question);
-  if (rule) return withOptions(rule, options, 'green');
+  if (rule) {
+    const res = withOptions(rule, options, 'green');
+    await record(res.value);
+    return res;
+  }
 
   try {
     const answer = await llmAnswer(question, profile, job, options);
     if (answer) {
-      await saveGenerated(db, uid, question, answer);
-      return withOptions(answer, options, 'yellow');
+      const res = withOptions(answer, options, 'yellow');
+      await record(res.value);
+      return res;
     }
   } catch {
     // fall through to red below — never invent an answer
   }
+  await record('');
   return { value: null, confidence: 'red' };
 }

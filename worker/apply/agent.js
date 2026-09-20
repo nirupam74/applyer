@@ -14,7 +14,7 @@ const FieldValue = admin.firestore.FieldValue;
 const MAX_SCREENSHOTS = 6;
 const MAX_SCREENSHOT_BYTES = 300 * 1024;
 const MAX_STEPS = 12;
-export const MIN_APPLY_SCORE = 80; // never apply below this match score (web/src/pages/Jobs.tsx hides them too)
+export const MIN_APPLY_SCORE = 70; // never apply below this match score
 const HUMAN_WAIT_MS = 10 * 60e3;
 
 // ---- small page helpers -----------------------------------------------------
@@ -1014,12 +1014,13 @@ export async function applyToJob({ db, uid, log }, payload) {
 // applyBatch({ db, uid, log }, { jobIds?, limit? })
 export async function applyBatch({ db, uid, log }, payload = {}) {
   const userRef = db.collection('users').doc(uid);
-  const limit = payload.limit || 20;
+  const limit = payload.limit || 200;
 
   let jobIds = payload.jobIds;
   if (!jobIds || !jobIds.length) {
-    const snap = await userRef.collection('jobs').where('status', '==', 'saved').orderBy('rank', 'asc').get();
-    jobIds = snap.docs.filter((d) => d.data().score >= MIN_APPLY_SCORE).slice(0, limit).map((d) => d.id);
+    // Every job at or above the bar, best first; saving a job is no longer required.
+    const snap = await userRef.collection('jobs').where('score', '>=', MIN_APPLY_SCORE).orderBy('score', 'desc').get();
+    jobIds = snap.docs.filter((d) => !['dismissed', 'applied'].includes(d.data().status)).slice(0, limit).map((d) => d.id);
   } else {
     jobIds = jobIds.slice(0, limit);
   }

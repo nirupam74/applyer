@@ -15,9 +15,6 @@ const runStyle: Record<string, string> = {
   running: 'text-[var(--accent)]',
 }
 
-// Jobs below this match score are never shown or applied to (worker: MIN_APPLY_SCORE in apply/agent.js).
-const MIN_SCORE = 80
-
 export default function Jobs() {
   const { user } = useUser()
   const uid = user!.uid
@@ -26,14 +23,14 @@ export default function Jobs() {
   const [taskId, setTaskId] = useState<string | null>(null)
 
   const [q, setQ] = useState('')
-  const [minScore, setMinScore] = useState(MIN_SCORE)
+  const [minScore, setMinScore] = useState(0)
   const [workMode, setWorkMode] = useState('')
   const [source, setSource] = useState('')
   const [status, setStatus] = useState('')
   const [maxDays, setMaxDays] = useState(0)
   const [empType, setEmpType] = useState('')
   const [hasSalary, setHasSalary] = useState(false)
-  const [rankedOnly, setRankedOnly] = useState(true)
+  const [rankedOnly, setRankedOnly] = useState(false)
 
   const empTypes = useMemo(() => [...new Set((jobs ?? []).map((j) => j.employmentType).filter(Boolean))].sort(), [jobs])
 
@@ -42,7 +39,7 @@ export default function Jobs() {
     return (jobs ?? []).filter((j) => {
       if (rankedOnly && j.rank == null && j.status !== 'saved') return false
       if (needle && !`${j.title} ${j.company} ${j.location}`.toLowerCase().includes(needle)) return false
-      if (j.score < Math.max(MIN_SCORE, minScore)) return false
+      if (j.score < minScore) return false
       if (workMode && j.workMode !== workMode) return false
       if (source && !j.sources.some((s) => s.name === source)) return false
       if (status ? j.status !== status : j.status === 'dismissed') return false
@@ -68,7 +65,7 @@ export default function Jobs() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">Jobs</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Only jobs with a match score of {MIN_SCORE} or higher, ranked from your profile preferences and a resume-to-job analysis.
+            Every job found, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 70 or higher.
           </p>
         </div>
         <button
@@ -106,7 +103,7 @@ export default function Jobs() {
         />
         <label className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
           Score ≥
-          <input type="number" min={MIN_SCORE} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value) || MIN_SCORE)} className={`${select} w-16`} />
+          <input type="number" min={0} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value) || 0)} className={`${select} w-16`} />
         </label>
         <select value={workMode} onChange={(e) => setWorkMode(e.target.value)} className={select}>
           <option value="">Any work mode</option>

@@ -7,6 +7,9 @@ import type { Answer } from '../lib/types'
 
 type AnswerRow = Answer & { id: string }
 
+// Must match the worker's key (apply/answers.js norm): the agent looks answers up by it.
+const questionKey = (q: string) => q.replace(/\s+/g, ' ').trim().toLowerCase()
+
 export default function Answers() {
   const { user } = useUser()
   const uid = user!.uid
@@ -18,11 +21,16 @@ export default function Answers() {
 
   useEffect(() => {
     const q = query(userCol(uid, 'answers'), orderBy('question'))
-    return onSnapshot(q, (snap) => setAnswers(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Answer) }))))
+    // Questions still waiting for an answer first, then ones you have not approved yet.
+    const weight = (a: Answer) => (!a.answer ? 0 : a.approved ? 2 : 1)
+    return onSnapshot(q, (snap) =>
+      setAnswers(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Answer) })).sort((a, b) => weight(a) - weight(b))),
+    )
   }, [uid])
 
-  async function saveAnswer(id: string) {
-    await updateDoc(doc(db, 'users', uid, 'answers', id), { answer: draft, source: 'user' })
+  // Changing an answer is approving it.
+  async function saveAnswer(id: string, answer = draft) {
+    await updateDoc(doc(db, 'users', uid, 'answers', id), { answer, source: 'user', approved: true })
     setEditingId(null)
   }
 
@@ -39,6 +47,7 @@ export default function Answers() {
     if (!newQ.trim() || !newA.trim()) return
     await addDoc(userCol(uid, 'answers'), {
       question: newQ.trim(),
+      questionKey: questionKey(newQ),
       answer: newA.trim(),
       tags: [],
       source: 'user',
@@ -55,7 +64,8 @@ export default function Answers() {
       <div>
         <h1 className="text-2xl font-semibold text-[var(--text)]">Answers</h1>
         <p className="mt-1 text-sm text-[var(--text-muted)]">
-          Reusable answers for application questions. Approved answers are used automatically when filling forms.
+          Every question the agent has met on an application, with the answer it gave. Pick one of the form's options or
+          type your own to change it; the agent uses your answer from then on. Questions it could not answer are listed first.
         </p>
       </div>
 
@@ -82,16 +92,32 @@ export default function Answers() {
             <div key={a.id} className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-sm font-medium text-[var(--text)]">{a.question}</p>
-                <span className="shrink-0 rounded-full bg-[var(--bg-sunken)] px-2 py-0.5 text-xs text-[var(--text-muted)]">
-                  {a.source}
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${a.answer ? 'bg-[var(--bg-sunken)] text-[var(--text-muted)]' : 'bg-[var(--danger-bg)] text-[var(--danger)]'}`}
+                >
+                  {a.answer ? a.source : 'needs your answer'}
                 </span>
               </div>
+              {!!a.options?.length && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {a.options.map((o) => (
+                    <button
+                      key={o}
+                      type="button"
+                      onClick={() => void saveAnswer(a.id, o)}
+                      className={`rounded-lg border px-3 py-1 text-sm ${o === a.answer ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)]' : 'border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
+                    >
+                      {o}
+                    </button>
+                  ))}
+                </div>
+              )}
               {editingId === a.id ? (
                 <textarea
                   autoFocus
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  onBlur={() => void saveAnswer(a.id)}
+                  onBlur={() => (draft === a.answer ? setEditingId(null) : void saveAnswer(a.id))}
                   rows={2}
                   className={`${input} mt-2`}
                 />

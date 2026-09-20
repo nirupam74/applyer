@@ -252,6 +252,7 @@ export interface CoverLetter {
 export interface Answer {
   question: string
   answer: string
+  options?: string[] // what the form offered; the Answers page shows them as choices
   tags: string[]
   source: 'user' | 'generated'
   approved: boolean
