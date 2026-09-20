@@ -26,10 +26,13 @@ function hostOf(url) {
 
 // A CAPTCHA is never solved. A verification-code step is answered from the user's own
 // mailbox (apply/mail.js); if no code arrives the step is reported as blocked.
-async function detectPause(page, ctx) {
-  const raw = await detectPauseRaw(page);
+// root: the Page, or the Frame that holds the form (iCIMS keeps the application in an iframe).
+const pageOf = (root) => (typeof root.page === 'function' ? root.page() : root);
+
+async function detectPause(root, ctx) {
+  const raw = await detectPauseRaw(root);
   if (!raw || !raw.startsWith('verification code')) return raw;
-  const ok = await enterVerificationCode(page, ctx).catch((err) => { ctx.log && ctx.log(`mail: ${err.message}`); return false; });
+  const ok = await enterVerificationCode(root, ctx).catch((err) => { ctx.log && ctx.log(`mail: ${err.message}`); return false; });
   return ok ? null : `blocked: ${raw} and no code arrived by email`;
 }
 
@@ -45,7 +48,7 @@ function notify(message) {
   execFile('osascript', ['-e', `display notification ${JSON.stringify(message)} with title "Applyer" sound name "Ping"`], () => {});
 }
 
-export async function waitForHuman(page, ctx, pause) {
+export async function waitForHuman(page, ctx, pause, root = page) {
   if (!ctx.headed || !isCaptcha(pause)) return pause;
   await ctx.log?.(`${pause}: waiting up to 10 min for you to solve it in the open window`);
   notify(`Solve the CAPTCHA for ${ctx.job.title} at ${ctx.job.company} in the open browser window.`);
@@ -53,14 +56,15 @@ export async function waitForHuman(page, ctx, pause) {
   for (const end = Date.now() + HUMAN_WAIT_MS; Date.now() < end; ) {
     await page.waitForTimeout(3000);
     if (page.isClosed()) return 'the window was closed before the CAPTCHA was solved';
-    pause = await detectPauseRaw(page);
-    if (!isCaptcha(pause)) { await ctx.log?.('CAPTCHA solved by the user, continuing'); return detectPause(page, ctx); }
+    pause = await detectPauseRaw(root);
+    if (!isCaptcha(pause)) { await ctx.log?.('CAPTCHA solved by the user, continuing'); return detectPause(root, ctx); }
   }
   return `${pause}: nobody solved it within 10 minutes`;
 }
 
-async function enterVerificationCode(page, ctx) {
-  const input = await page.$('input[autocomplete="one-time-code"], input[name*="code" i], input[id*="code" i], input[aria-label*="code" i], input[placeholder*="code" i]');
+async function enterVerificationCode(root, ctx) {
+  const page = pageOf(root);
+  const input = await root.$('input[autocomplete="one-time-code"], input[name*="code" i], input[id*="code" i], input[aria-label*="code" i], input[placeholder*="code" i]');
   if (!input) return false;
   await ctx.log?.('verification code requested, checking the mailbox');
   const host = hostOf(page.url()).replace(/^www\./, '').split('.')[0];
@@ -69,7 +73,7 @@ async function enterVerificationCode(page, ctx) {
   if (!found) return false;
   await input.fill(found.code);
   await ctx.log?.(`entered verification code from "${found.subject.slice(0, 60)}"`);
-  await clickByText(page, page, ['Verify', 'Submit', 'Continue', 'Next', 'Confirm']).catch(() => {});
+  await clickByText(page, root, ['Verify', 'Submit', 'Continue', 'Next', 'Confirm']).catch(() => {});
   await page.waitForTimeout(4000);
   return true;
 }
@@ -79,12 +83,16 @@ export async function detectPauseRaw(page) {
   // (LinkedIn does) without ever showing a challenge; an invisible v3 badge is not a wall.
   try {
     const found = await page.evaluate(() => {
-      const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 40 && r.height > 40 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0'; };
+      // hCaptcha parks its challenge frame off screen inside a transparent container until it is needed.
+      const shown = (el) => { for (let e = el; e; e = e.parentElement) if (getComputedStyle(e).opacity === '0') return false; return el.getBoundingClientRect().top > -2000; };
+      const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 40 && r.height > 40 && cs.visibility !== 'hidden' && cs.display !== 'none' && shown(el); };
       // A solved checkbox stays on screen; the response token is what says it is done.
       const solved = [...document.querySelectorAll('[name="g-recaptcha-response"], [name="h-captcha-response"], [name="cf-turnstile-response"]')].some((t) => (t.value || '').length > 20);
       for (const f of solved ? [] : document.querySelectorAll('iframe')) {
         const src = f.getAttribute('src') || '';
-        if (/size=invisible/.test(src)) continue;
+        // "Invisible" mode shows no checkbox, but it still puts up a full image challenge when it
+        // distrusts the session (iCIMS login): a big visible frame is a wall whatever its mode.
+        if (/size=invisible/.test(src) && !(f.getBoundingClientRect().width > 300 && visible(f))) continue;
         if (/recaptcha\/api2\/(anchor|bframe)|recaptcha\/enterprise\/(anchor|bframe)/.test(src) && visible(f)) return 'recaptcha';
         if (/hcaptcha\.com/.test(src) && visible(f)) return 'hcaptcha';
         if (/challenges\.cloudflare\.com/.test(src) && visible(f)) return 'cloudflare turnstile';
@@ -560,9 +568,9 @@ async function ensureWorkdayAccount(page, root, ctx, host, appEmail) {
   const emailField = (await root.$$('input[type=email]'))[0];
   if (emailField) await emailField.fill(creds.email).catch(() => {});
   for (const f of pwFields) await f.fill(creds.password).catch(() => {});
-  await clickByText(page, root, ['Create Account', 'Sign Up', 'Continue']);
+  await clickByText(page, root, ['Create Account', 'Sign Up', 'Continue', 'Log In', 'Login', 'Sign In', 'Next']);
   await page.waitForTimeout(1200);
-  return { name: 'workday account', value: creds.email, confidence: 'green' };
+  return { name: `${host} account`, value: creds.email, confidence: 'green' };
 }
 
 // ---- confirmation / screenshots ---------------------------------------------
@@ -947,25 +955,28 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   const popup = await revealApplyForm(page);
   if (popup) page = popup; // reassigning the parameter: every use below now targets the new tab
   const host = hostOf(page.url());
+  // iCIMS keeps the whole application in one named iframe (email, hCaptcha, account, forms).
+  const root = () => page.frame({ name: 'icims_content_iframe' }) || page;
+  const hasAccounts = () => /workday/i.test(host) || root() !== page;
   let lastStep = null;
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
-    let pause = await detectPause(page, ctx);
+    let pause = await detectPause(root(), ctx);
     // A CAPTCHA beside a form's Submit is left for last in a visible run: its token expires about
     // two minutes after it is solved, so the form is filled first. A full-page challenge (no
     // Submit/Next on the page) has to be cleared before anything else.
-    const captchaInForm = ctx.headed && isCaptcha(pause) && !!(await findByText(page, [...SUBMIT_TEXTS, ...NEXT_TEXTS]));
-    if (!captchaInForm) pause = await waitForHuman(page, ctx, pause);
+    const captchaInForm = ctx.headed && isCaptcha(pause) && !!(await findByText(root(), [...SUBMIT_TEXTS, ...NEXT_TEXTS]));
+    if (!captchaInForm) pause = await waitForHuman(page, ctx, pause, root());
     if (pause && !captchaInForm) return { status: 'blocked', error: pause };
 
-    if (/workday/i.test(host)) {
-      const acct = await ensureWorkdayAccount(page, page, ctx, host, docs.email);
+    if (hasAccounts()) {
+      const acct = await ensureWorkdayAccount(page, root(), ctx, host, docs.email);
       if (acct) { allFields.push(acct); await recordFields(appRef, [acct]); }
-      const pause2 = await detectPause(page, ctx);
+      const pause2 = await detectPause(root(), ctx);
       if (pause2) return { status: 'blocked', error: `blocked: verification code (${pause2})` };
     }
 
-    const fields = await fillGenericForm(page, page, ctx, docs);
+    const fields = await fillGenericForm(page, root(), ctx, docs);
     allFields.push(...fields);
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
@@ -973,16 +984,18 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
     // Same step as last round and nothing left to fill: Next was refused. Say why now instead of
     // pressing it ten more times (a rejected phone format cost 9 minutes on Manulife).
     // (Uploads and re-ticked boxes repeat every round, so "same step, same fills" is the test.)
-    const thisStep = `${await stepSignature(page)}|${fields.map((f) => `${f.name}=${f.value}`).join(';')}`;
-    if (thisStep === lastStep) {
-      const why = await visibleErrors(page);
+    // A pending CAPTCHA is not a refusal: Next stays put until the user has solved it.
+    const sig = await stepSignature(root());
+    const thisStep = `${sig}|${fields.map((f) => `${f.name}=${f.value}`).join(';')}`;
+    if (thisStep === lastStep && !captchaInForm) {
+      const why = await visibleErrors(root());
       return { status: 'blocked', error: `the form did not move on${why ? `: ${why}` : ' (no error shown)'}`, portalUrl: page.url() };
     }
     lastStep = thisStep;
 
-    const submitBtn = await findByText(page, SUBMIT_TEXTS);
+    const submitBtn = await findByText(root(), SUBMIT_TEXTS);
     if (submitBtn) {
-      const invalid = await invalidRequired(page);
+      const invalid = await invalidRequired(root());
       if (invalid.length) {
         const gaps = invalid.map((name) => ({ name, value: '', confidence: 'red' }));
         allFields.push(...gaps); await recordFields(appRef, gaps);
@@ -990,21 +1003,23 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
       }
       if (ctx._requiredGap) return { status: 'blocked', error: 'required field(s) left empty' };
       if (!ctx.autoSubmit) return { status: 'ready', portalUrl: page.url() };
-      const result = await submitAndVerify(page, submitBtn);
+      const result = await submitAndVerify(root(), submitBtn);
       await takeShot(page, appRef, screenshots);
       if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
       return { status: 'submitted', confirmation: result.confirmation, portalUrl: page.url() };
     }
     // Same rule as Submit: a page with empty required fields will not advance, and clicking Next
     // at it for twelve rounds cost 13 minutes per job on Phenom forms (RBC, Manulife).
-    const gapsBeforeNext = await invalidRequired(page);
+    const gapsBeforeNext = await invalidRequired(root());
     if (gapsBeforeNext.length || ctx._requiredGap) {
       const names = gapsBeforeNext.length ? gapsBeforeNext : fields.filter((f) => f.confidence === 'red' && !f.value).map((f) => f.name);
       return { status: 'blocked', error: `required field(s) left empty: ${names.slice(0, 4).join(' | ')}`, portalUrl: page.url() };
     }
-    const stillNext = captchaInForm && (await waitForHuman(page, ctx, pause));
+    const stillNext = captchaInForm && (await waitForHuman(page, ctx, pause, root()));
     if (stillNext) return { status: 'blocked', error: stillNext, portalUrl: page.url() };
-    const nextTxt = await clickByText(page, page, NEXT_TEXTS);
+    // An invisible hCaptcha (iCIMS) sends the form itself once solved: the next step is already up.
+    if (captchaInForm && (await stepSignature(root())) !== sig) continue;
+    const nextTxt = await clickByText(page, root(), NEXT_TEXTS);
     if (!nextTxt) return { status: 'blocked', error: 'no Next/Submit control found; may need manual completion', portalUrl: page.url() };
     await page.waitForTimeout(1200);
   }
