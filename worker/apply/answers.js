@@ -73,7 +73,14 @@ const RULES = [
     get: (p) => yesNo(classifyWorkAuth(p.workAuthorization).needsSponsorship),
   },
   { re: /citizenship/i, get: (p) => p.demographics?.citizenship || p.workAuthorization },
-  { re: /salary|compensation expectation|pay expectation/i, get: (p) => (p.preferences?.salaryMin ? String(p.preferences.salaryMin) : null) },
+  // preferences.hourlyMin (the user's floor is Ontario's minimum wage) answers in the unit the
+  // question asks for: hourly, or annualised at 40 h x 52 weeks.
+  { re: /salary|compensation expectation|pay expectation|hourly (rate|wage)|expected (pay|wage)/i, get: (p, s, q) => {
+    const h = p.preferences?.hourlyMin;
+    if (!h) return p.preferences?.salaryMin ? String(p.preferences.salaryMin) : null;
+    if (/annual|per year|yearly/i.test(q)) return String(Math.round(h * 2080));
+    return /hour/i.test(q) ? String(h) : `$${h} per hour`;
+  } },
   { re: /years? of experience/i, get: (p) => { const y = yearsOfExperience(p); return y == null ? null : String(y); } },
   { re: /start date|available to start|availability/i, get: (p) => p.availability },
   { re: /gpa/i, get: (p) => p.education?.[0]?.gpa },
@@ -109,7 +116,7 @@ export function applyRules(profile, settings, question) {
   const s = settings || {};
   for (const rule of RULES) {
     if (rule.re.test(question)) {
-      const raw = rule.get(p, s);
+      const raw = rule.get(p, s, question);
       if (raw != null && String(raw).trim() !== '') return String(raw).trim();
     }
   }

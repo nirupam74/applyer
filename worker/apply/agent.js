@@ -545,7 +545,10 @@ export function applyUrls(job) {
 
 // Reuse a previous attempt's documents for this job when they still exist on disk, so a retry
 // doesn't pay for another 60-90s LLM tailoring + cover-letter pass.
-async function findCachedDocs(userRef, jobId) {
+// Documents tailored before the profile last changed are stale (a corrected graduation date must
+// not keep going out on an old resume), so only attempts newer than profile.updatedAt count.
+async function findCachedDocs(userRef, jobId, profileUpdatedAt) {
+  const validFrom = profileUpdatedAt?.toMillis?.() || 0;
   const snap = await userRef.collection('applications')
     .where('jobId', '==', jobId)
     .orderBy('createdAt', 'desc')
@@ -554,6 +557,7 @@ async function findCachedDocs(userRef, jobId) {
   for (const doc of snap.docs) {
     const d = doc.data();
     if (!d.resumeVersionId || !d.coverLetterId || !d.resumePath || !d.coverPath) continue;
+    if ((d.createdAt?.toMillis?.() || 0) < validFrom) continue;
     try {
       await fsp.access(d.resumePath);
       await fsp.access(d.coverPath);
@@ -951,7 +955,7 @@ export async function applyToJob({ db, uid, log }, payload) {
       };
       await appendLog('using provided document paths (override)');
     } else {
-      docs = await findCachedDocs(userRef, jobId);
+      docs = await findCachedDocs(userRef, jobId, profile.updatedAt);
       if (docs) {
         await appendLog('reusing documents from a previous attempt on this job');
       } else {
