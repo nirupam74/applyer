@@ -864,6 +864,13 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
       if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
       return { status: 'submitted', confirmation: result.confirmation, portalUrl: page.url() };
     }
+    // Same rule as Submit: a page with empty required fields will not advance, and clicking Next
+    // at it for twelve rounds cost 13 minutes per job on Phenom forms (RBC, Manulife).
+    const gapsBeforeNext = await invalidRequired(page);
+    if (gapsBeforeNext.length || ctx._requiredGap) {
+      const names = gapsBeforeNext.length ? gapsBeforeNext : fields.filter((f) => f.confidence === 'red' && !f.value).map((f) => f.name);
+      return { status: 'blocked', error: `required field(s) left empty: ${names.slice(0, 4).join(' | ')}`, portalUrl: page.url() };
+    }
     const stillNext = captchaInForm && (await waitForHuman(page, ctx, pause));
     if (stillNext) return { status: 'blocked', error: stillNext, portalUrl: page.url() };
     const nextTxt = await clickByText(page, page, NEXT_TEXTS);

@@ -86,8 +86,11 @@ const RULES = [
   { re: /ethnicity|race\b|hispanic|latino/i, get: (p) => p.demographics?.ethnicity || 'Prefer not to answer' },
   { re: /disability/i, get: (p) => p.demographics?.disability || 'Prefer not to answer' },
   { re: /veteran|military/i, get: (p) => p.demographics?.veteran || 'Prefer not to answer' },
-  { re: /^city$|city\/town|current location|location \(city\)/i, get: (p) => firstPart(p.personal?.location) },
-  { re: /province|state/i, get: (p) => partAt(p.personal?.location, 1) },
+  // location is "City, Province, Country" or just "Province, Country": never answer City with a province.
+  { re: /^city\b|city\/town|current location|location \(city\)/i, get: (p) => p.personal?.city || (parts(p.personal?.location).length >= 3 ? firstPart(p.personal?.location) : null) },
+  { re: /postal|zip code/i, get: (p) => p.personal?.postalCode },
+  { re: /province|state/i, get: (p) => partAt(p.personal?.location, Math.max(0, parts(p.personal?.location).length - 2)) },
+  { re: /phone (device )?type/i, get: () => 'Mobile' },
   { re: /country/i, get: (p) => lastPart(p.personal?.location) },
   { re: /location|address/i, get: (p) => p.personal?.location },
 ];
