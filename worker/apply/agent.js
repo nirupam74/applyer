@@ -489,7 +489,7 @@ async function clickByText(page, root, texts) {
 
 const stepSignature = (page) => page.evaluate(() => `${location.href}|${[...document.querySelectorAll('h1, h2, h3, legend')].filter((h) => h.offsetParent).map((h) => h.innerText.trim()).join('|').slice(0, 400)}`).catch(() => page.url());
 
-const visibleErrors = (page) => page.evaluate(() => [...new Set([...document.querySelectorAll('[role=alert], [class*="error" i], [id*="error" i]')].filter((e) => e.offsetParent && !e.querySelector('input, select, textarea')).map((e) => e.innerText.trim()).filter((t) => t && t.length < 160))].slice(0, 3).join(' / ')).catch(() => '');
+const visibleErrors = (page) => page.evaluate(() => [...new Set([...document.querySelectorAll('[role=alert], [class*="error" i], [id*="error" i]')].filter((e) => e.offsetParent && !e.querySelector('input, select, textarea')).flatMap((e) => e.innerText.split('\n')).map((t) => t.trim()).filter((t) => t && t.length < 160))].slice(0, 4).join(' / ')).catch(() => '');
 
 // ---- Workday account creation ----------------------------------------------
 
@@ -926,8 +926,9 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
 
     // Same step as last round and nothing left to fill: Next was refused. Say why now instead of
     // pressing it ten more times (a rejected phone format cost 9 minutes on Manulife).
-    const thisStep = await stepSignature(page);
-    if (thisStep === lastStep && !fields.some((f) => f.value)) {
+    // (Uploads and re-ticked boxes repeat every round, so "same step, same fills" is the test.)
+    const thisStep = `${await stepSignature(page)}|${fields.map((f) => `${f.name}=${f.value}`).join(';')}`;
+    if (thisStep === lastStep) {
       const why = await visibleErrors(page);
       return { status: 'blocked', error: `the form did not move on${why ? `: ${why}` : ' (no error shown)'}`, portalUrl: page.url() };
     }

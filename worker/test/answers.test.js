@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyWorkAuth, yearsOfExperience, applyRules } from '../apply/answers.js';
+import { classifyWorkAuth, yearsOfExperience, applyRules, fullUrl } from '../apply/answers.js';
 
 test('classifyWorkAuth: citizen needs no sponsorship and is authorized', () => {
   const c = classifyWorkAuth('Canadian citizen, no sponsorship required');
@@ -43,6 +43,15 @@ test('applyRules: email prefers settings override over profile email', () => {
 test('applyRules: email falls back to profile when no override is set', () => {
   const profile = { personal: { email: 'profile@example.com' } };
   assert.equal(applyRules(profile, {}, 'Email'), 'profile@example.com');
+});
+
+test('fullUrl: bare resume-style links gain a scheme, everything else is left alone', () => {
+  assert.equal(fullUrl('linkedin.com/in/nirupam-gupta'), 'https://www.linkedin.com/in/nirupam-gupta');
+  assert.equal(fullUrl('https://linkedin.com/in/nirupam-gupta'), 'https://www.linkedin.com/in/nirupam-gupta');
+  assert.equal(fullUrl('www.nirupamgupta.com'), 'https://www.nirupamgupta.com');
+  assert.equal(fullUrl('https://www.nirupamgupta.com'), 'https://www.nirupamgupta.com');
+  assert.equal(fullUrl('nirupam.gupta@mail.utoronto.ca'), 'nirupam.gupta@mail.utoronto.ca');
+  assert.equal(fullUrl('Brampton'), 'Brampton');
 });
 
 test('applyRules: unmatched question returns null (never invents an answer)', () => {

@@ -143,9 +143,18 @@ function resolveOption(value, options) {
   return { text: null, fuzzy: true };
 }
 
+// "linkedin.com/in/x" and "www.site.com" (as written on a resume) fail URL validation on Phenom
+// forms ("Please enter a valid LinkedIn URL"); a full URL is accepted everywhere. Manulife's
+// form also refused https://linkedin.com/...: LinkedIn links go out in the canonical www form.
+export const fullUrl = (v) => {
+  const li = String(v).match(/^(?:https?:\/\/)?(?:www\.)?(linkedin\.com\/\S+)$/i);
+  if (li) return `https://www.${li[1]}`;
+  return /^(www\.)?[\w-]+(\.[\w-]+)*\.(com|ca|io|dev|org|net|co|me|app)(\/\S*)?$/i.test(v) ? `https://${v}` : v;
+};
+
 function withOptions(rawValue, options, confidence) {
   if (rawValue == null) return { value: null, confidence: 'red' };
-  if (!options || !options.length) return { value: rawValue, confidence };
+  if (!options || !options.length) return { value: fullUrl(rawValue), confidence };
   const { text, fuzzy } = resolveOption(rawValue, options);
   if (!text) return { value: null, confidence: 'red' };
   return { value: text, confidence: fuzzy ? 'red' : confidence };
@@ -192,7 +201,7 @@ async function llmAnswer(question, profile, job, options) {
   const jobCtx = job ? `\n\nJob: ${job.title || ''} at ${job.company || ''}\n${String(job.description || '').slice(0, 3000)}` : '';
   const prompt =
     `A job application form asks the candidate this question. Answer briefly using only facts present in the ` +
-    `profile JSON below.${optCtx}\n\nQuestion: "${question}"${jobCtx}\n\nCandidate profile (JSON):\n${JSON.stringify(profile || {}).slice(0, 6000)}`;
+    `profile JSON below.${optCtx}\n\nQuestion: "${question}"${jobCtx}\n\nCandidate profile (JSON):\n${JSON.stringify(profile || {}).slice(0, 30000)}`;
   const result = await ask(prompt, '{"answer": string|null, "missing": string[]}');
   const answer = result && typeof result.answer === 'string' ? result.answer.trim() : '';
   return answer || null;
@@ -220,8 +229,12 @@ export async function getAnswer({ db, uid, profile, settings, job }, question, o
   const rule = applyRules(profile, settings, question);
   if (rule) {
     const res = withOptions(rule, options, 'green');
-    await record(res.value);
-    return res;
+    // The profile's wording ("Honours Bachelor of Arts") may be none of this form's options
+    // ("Degree", "Diploma", "Masters"): then the LLM picks from the list instead of a dead end.
+    if (res.value || !options?.length) {
+      await record(res.value);
+      return res;
+    }
   }
 
   if (bank && !bank.trusted) {
