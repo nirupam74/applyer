@@ -22,7 +22,6 @@ const runStyle: Record<string, string> = {
 export default function Jobs() {
   const { user } = useUser()
   const uid = user!.uid
-  const jobs = useJobs(uid)
   const runs = useSourceRuns(uid)
   const [taskId, setTaskId] = useState<string | null>(null)
   const activeId = useActiveTask(uid, ['searchJobs', 'prepareBatch'])
@@ -30,6 +29,13 @@ export default function Jobs() {
   const [q, setQ] = useState('')
   const [minScore, setMinScoreState] = useState(MIN_SCORE)
   useEffect(() => onSnapshot(userDoc(uid, 'settings', 'jobs'), (snap) => setMinScoreState(snap.data()?.minScore ?? MIN_SCORE)), [uid])
+  // The list is re-read from the database only once the number has settled, not on every keystroke.
+  const [floor, setFloor] = useState<number | null>(null)
+  useEffect(() => {
+    const t = setTimeout(() => setFloor(minScore), floor === null ? 0 : 800)
+    return () => clearTimeout(t)
+  }, [minScore]) // eslint-disable-line react-hooks/exhaustive-deps
+  const jobs = useJobs(uid, floor ?? MIN_SCORE)
   function setMinScore(value: number) {
     setMinScoreState(value)
     void setDoc(userDoc(uid, 'settings', 'jobs'), { minScore: value }, { merge: true })

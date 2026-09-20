@@ -2,7 +2,7 @@ import { updateDoc } from 'firebase/firestore'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useUser } from '../auth'
-import { TRACKED, setJobStatus, useJobs, type JobRow } from '../lib/jobs'
+import { TRACKED, setJobStatus, useTrackedJobs, type JobRow } from '../lib/jobs'
 import { safeUrl } from '../lib/download'
 import { userDoc } from '../lib/paths'
 import type { Job } from '../lib/types'
@@ -13,7 +13,7 @@ import { ScorePill } from './Jobs'
 export default function Applications() {
   const { user } = useUser()
   const uid = user!.uid
-  const jobs = useJobs(uid)
+  const jobs = useTrackedJobs(uid)
 
   const { tracked, ready } = useMemo(() => {
     const all = jobs ?? []

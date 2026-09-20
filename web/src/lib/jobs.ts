@@ -1,20 +1,39 @@
-import { onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { userCol, userDoc } from './paths'
 import type { Job, SourceRun } from './types'
 
 export type JobRow = Job & { id: string }
 
-export function useJobs(uid: string) {
+// Only jobs at or above the floor are read: every document read counts against the free daily quota,
+// and an open list is re-read whenever a search rewrites its jobs.
+export function useJobs(uid: string, minScore = 0) {
   const [jobs, setJobs] = useState<JobRow[] | null>(null)
   useEffect(
     () =>
-      onSnapshot(query(userCol(uid, 'jobs'), orderBy('score', 'desc')), (snap) =>
+      onSnapshot(query(userCol(uid, 'jobs'), where('score', '>=', minScore), orderBy('score', 'desc')), (snap) =>
         setJobs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Job) }))),
       ),
-    [uid],
+    [uid, minScore],
   )
   return jobs
+}
+
+// The Applications page: jobs the member acted on plus jobs with documents, not the whole list.
+export function useTrackedJobs(uid: string) {
+  const [parts, setParts] = useState<Record<string, JobRow[] | null>>({ tracked: null, ready: null })
+  useEffect(() => {
+    const rows = (key: string) => (snap: { docs: { id: string; data: () => unknown }[] }) =>
+      setParts((p) => ({ ...p, [key]: snap.docs.map((d) => ({ id: d.id, ...(d.data() as Job) })) }))
+    const a = onSnapshot(query(userCol(uid, 'jobs'), where('status', 'in', ['applied', 'interview', 'offer', 'rejected'])), rows('tracked'))
+    const b = onSnapshot(query(userCol(uid, 'jobs'), where('docs.preparedAt', '>', new Date(0))), rows('ready'))
+    return () => {
+      a()
+      b()
+    }
+  }, [uid])
+  if (!parts.tracked || !parts.ready) return null
+  return [...new Map([...parts.tracked, ...parts.ready].map((j) => [j.id, j])).values()]
 }
 
 export function useSourceRuns(uid: string) {

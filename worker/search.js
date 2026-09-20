@@ -84,7 +84,7 @@ export async function searchJobs({ db, uid, log }, payload) {
       const merged = prev ? mergeFresh(prev, fresh) : { ...fresh, status: 'new', matchPct: null, analysis: null, discoveredAt: new Date() };
       jobs.set(id, { id, ...merged });
     }
-    for (const [id, prev] of existing) if (!jobs.has(id)) jobs.set(id, { id, ...prev });
+    for (const [id, prev] of existing) if (!jobs.has(id)) jobs.set(id, { id, ...prev, _was: { score: prev.score, rank: prev.rank ?? null, analysis: prev.analysis } });
     await log(`${found.size} unique listings this run, ${jobs.size} total after merge`);
 
     // 3. Heuristic score, then descriptions for the strongest candidates.
@@ -157,14 +157,17 @@ export async function searchJobs({ db, uid, log }, payload) {
 
   let batch = db.batch();
   let n = 0;
+  let unchanged = 0;
   for (const job of all) {
-    const { id, ...data } = job;
+    const { id, _was, ...data } = job;
+    // Not seen this run and nothing about it moved: no write (each one also wakes every open Jobs page).
+    if (_was && _was.score === data.score && _was.rank === data.rank && _was.analysis === data.analysis) { unchanged++; continue; }
     data.updatedAt = FieldValue.serverTimestamp();
     batch.set(userRef.collection('jobs').doc(id), data, { merge: true });
     if (++n % 400 === 0) { await batch.commit(); batch = db.batch(); }
   }
   await batch.commit();
-  await log(`wrote ${all.length} jobs, top ${Math.min(TOP_N, r)} ranked`);
+  await log(`wrote ${all.length - unchanged} jobs (${unchanged} unchanged), top ${Math.min(TOP_N, r)} ranked`);
 
   // Every search is followed by tailored documents for the strong matches that have none yet.
   if (payload.prepare !== false) {
