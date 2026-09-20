@@ -170,6 +170,8 @@ export function isPageFurniture(node) {
   const attrs = (n, names) => names.map((a) => n.getAttribute(a) || '').join(' ');
   const own = attrs(node, ['name', 'id', 'placeholder', 'aria-label']) + ' ' + [...(node.labels || [])].map((l) => l.innerText).join(' ');
   if (/alert|subscribe|newsletter|notify|talent (community|network)/i.test(own)) return true;
+  // Bot traps ("This input is for robots only", "Please leave this field blank"): a person never sees them.
+  if (/robots? only|leave (this )?(field )?(blank|empty)|do not (fill|enter)|honeypot|beecatcher/i.test(own)) return true;
   const form = node.closest('form');
   return !!form && /search|alert|subscribe|newsletter|notify/i.test(attrs(form, ['id', 'class', 'name', 'action', 'aria-label']));
 }
@@ -196,6 +198,14 @@ async function fillTextInputs(root, ctx, out) {
     const current = await el.inputValue().catch(() => '');
     // Phenom restores the saved draft, "none" in Phone Extension included, and keeps refusing it.
     if (/^(none|n\/?a|nil)\.?$/i.test(current.trim()) && !(await isRequired(el))) { await el.fill('').catch(() => {}); continue; }
+    // A signed-in Workday account prefills the phone as "+1 (647) 642-3609", which its own form
+    // then refuses; a prefilled box is otherwise never touched.
+    if (/^\+?1?[\s(.-]*\d{3}/.test(current.trim()) && nationalDigits(current).length === 10 && current.trim() !== nationalDigits(current)) {
+      const label = await labelFor(el);
+      const fixed = await acceptedPhone(el, label, current.trim());
+      if (fixed !== current.trim()) out.push({ name: label, value: fixed, confidence: 'green' });
+      continue;
+    }
     if (current.trim()) continue;
     // Workday multi-select (country phone code): its search box is always empty, the choice sits
     // beside it as a pill. Typing again every round re-opened the list over the phone field.
@@ -232,8 +242,11 @@ async function acceptedPhone(el, label, value) {
   // Workday only complains after Next, but it labels its country-code box.
   const ownCodeBox = await el.evaluate((e) => /phone code/i.test((e.closest('form') || document.body).innerText)).catch(() => false);
   if (!ownCodeBox && (await el.getAttribute('aria-invalid').catch(() => null)) !== 'true') return value;
+  // Typed like a person (select all, type): Workday's controlled input put the old value back after fill().
   const digits = nationalDigits(value);
-  await el.fill(digits).catch(() => {});
+  await el.click().catch(() => {});
+  await el.press('ControlOrMeta+a').catch(() => {});
+  await el.type(digits, { delay: 15 }).catch(() => {});
   await el.evaluate((e) => e.blur()).catch(() => {});
   return digits;
 }
@@ -246,7 +259,10 @@ async function pickSuggestion(el) {
     if (!frame) return;
     await new Promise((r) => setTimeout(r, 1500));
     const sel = '.dropdown-results > *, [role="listbox"] [role="option"], ul[class*="suggest" i] li, [class*="autocomplete" i] [class*="item" i], [class*="typeahead" i] li, .pac-item';
-    let opt = frame.locator(sel).filter({ visible: true }).first();
+    // Only a suggestion that contains what was typed: the first item of an unfiltered list put
+    // "Accounting" into TD's Field of Study.
+    const matching = () => frame.locator(sel).filter({ visible: true }).filter({ hasText: el._lastTyped || '' }).first();
+    let opt = matching();
     // Lookup services (Lever's location field) answer "No location found" under load and clear
     // the input. Retype with a longer pause each time. A field that kept its value and shows no
     // error is a plain text input: leave it alone.
@@ -262,7 +278,7 @@ async function pickSuggestion(el) {
       await new Promise((r) => setTimeout(r, pause));
       await el.click().catch(() => {}); await el.fill('').catch(() => {}); await el.type(el._lastTyped || typed, { delay: 60 }).catch(() => {});
       await new Promise((r) => setTimeout(r, 3000));
-      opt = frame.locator(sel).filter({ visible: true }).first();
+      opt = matching();
     }
     if (!(await opt.count().catch(() => 0))) return;
     await opt.click({ timeout: 3000 }); // a real pointer click: some widgets ignore synthetic clicks
@@ -546,33 +562,48 @@ function genPassword(len = 20) {
   return crypto.randomBytes(len).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, len) + '!9Aa';
 }
 
-async function ensureWorkdayAccount(page, root, ctx, host, appEmail) {
-  const createLink = root.locator('text=/create account/i').first();
-  if (await createLink.count().catch(() => 0)) {
-    if (await createLink.isVisible().catch(() => false)) {
-      await createLink.click().catch(() => {});
-      await page.waitForTimeout(800);
+// Sign in when this host already has an account on file, otherwise create one (email, password
+// twice, terms box). Credentials live in settings/portals keyed by host; `created` is only set once
+// the account page is gone, because an earlier run saved a password for an account it never made.
+// Returns null when the page has no account step, else a review field (with .error when stuck).
+export async function ensureWorkdayAccount(page, root, ctx, host, appEmail) {
+  const visiblePw = root.locator('input[type=password]').filter({ visible: true });
+  if (!(await visiblePw.count().catch(() => 0))) return null;
+
+  const portalsRef = ctx.db.collection('users').doc(ctx.uid).collection('settings').doc('portals');
+  const portals = ((await portalsRef.get()).data()) || {};
+  const creds = portals[host] || { email: appEmail, password: genPassword(20), createdAt: new Date().toISOString() };
+  if (!portals[host]) await portalsRef.set({ [host]: creds }, { merge: true });
+
+  const by = (id) => root.locator(`[data-automation-id="${id}"]`).filter({ visible: true }).first();
+  const onCreate = () => by('verifyPassword').count().then((n) => n > 0).catch(() => false);
+  const attempt = async (mode) => {
+    if ((mode === 'create') !== (await onCreate())) {
+      await by(mode === 'create' ? 'createAccountLink' : 'signInLink').click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(1500);
     }
-  }
-  const pwFields = await root.$$('input[type=password]');
-  if (!pwFields.length) return null; // no account step on this page
+    await root.locator('[data-automation-id="email"], input[type=email]').filter({ visible: true }).first().fill(creds.email).catch(() => {});
+    for (const f of await visiblePw.all()) await f.fill(creds.password).catch(() => {});
+    const terms = by('createAccountCheckbox');
+    if ((await terms.count().catch(() => 0)) && !(await terms.isChecked().catch(() => true))) await terms.check({ force: true }).catch(() => {});
+    // Workday lays a transparent "click_filter" over its submit button; the overlay is what a person clicks.
+    const overlay = by('click_filter');
+    if (await overlay.count().catch(() => 0)) await overlay.click({ timeout: 5000 }).catch(() => {});
+    else await clickByText(page, root, mode === 'create' ? ['Create Account', 'Sign Up', 'Continue', 'Next'] : ['Sign In', 'Log In', 'Login', 'Continue', 'Next']);
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(1500);
+      if (!(await visiblePw.count().catch(() => 0))) return null;
+      const err = await visibleErrors(root);
+      if (err) return err;
+    }
+    return 'the account page did not move on';
+  };
 
-  const userRef = ctx.db.collection('users').doc(ctx.uid);
-  const portalsRef = userRef.collection('settings').doc('portals');
-  const portalsSnap = await portalsRef.get();
-  const portals = (portalsSnap.exists && portalsSnap.data()) || {};
-  let creds = portals[host];
-  if (!creds) {
-    creds = { email: appEmail, password: genPassword(20), createdAt: new Date().toISOString() };
-    await portalsRef.set({ [host]: creds }, { merge: true });
-  }
-
-  const emailField = (await root.$$('input[type=email]'))[0];
-  if (emailField) await emailField.fill(creds.email).catch(() => {});
-  for (const f of pwFields) await f.fill(creds.password).catch(() => {});
-  await clickByText(page, root, ['Create Account', 'Sign Up', 'Continue', 'Log In', 'Login', 'Sign In', 'Next']);
-  await page.waitForTimeout(1200);
-  return { name: `${host} account`, value: creds.email, confidence: 'green' };
+  let error = await attempt(creds.created ? 'signin' : 'create');
+  if (error && !creds.created && /already|exist|in use|registered/i.test(error)) error = await attempt('signin');
+  if (!error && !creds.created) await portalsRef.set({ [host]: { ...creds, created: true } }, { merge: true });
+  await ctx.log?.(error ? `${host} account: ${error}` : `${host}: signed in as ${creds.email}`);
+  return { name: `${host} account`, value: creds.email, confidence: error ? 'red' : 'green', error };
 }
 
 // ---- confirmation / screenshots ---------------------------------------------
@@ -973,9 +1004,15 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
 
     if (hasAccounts()) {
       const acct = await ensureWorkdayAccount(page, root(), ctx, host, docs.email);
-      if (acct) { allFields.push(acct); await recordFields(appRef, [acct]); }
-      const pause2 = await detectPause(root(), ctx);
-      if (pause2) return { status: 'blocked', error: `blocked: verification code (${pause2})` };
+      if (acct) {
+        const { error, ...field } = acct;
+        allFields.push(field); await recordFields(appRef, [field]);
+        if (error) return { status: 'blocked', error: `account step: ${error}`, portalUrl: page.url() };
+        // Workday reloads after the account step (often onto its Sign In page): look again from
+        // the top, where a verification-code prompt is also handled.
+        await page.waitForTimeout(4000);
+        continue;
+      }
     }
 
     const fields = await fillGenericForm(page, root(), ctx, docs);
@@ -990,6 +1027,9 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
     const sig = await stepSignature(root());
     const thisStep = `${sig}|${fields.map((f) => `${f.name}=${f.value}`).join(';')}`;
     if (thisStep === lastStep && !captchaInForm) {
+      // What the refused boxes actually hold: the recorded answer and the DOM can differ.
+      const held = await root().evaluate(() => [...document.querySelectorAll('input[aria-invalid="true"], input[id*="phone" i]')].filter((i) => i.offsetParent).map((i) => `${i.id || i.name}="${i.value}"`).concat([...document.querySelectorAll('[data-automation-id="selectedItem"]')].map((p) => `pill="${p.innerText.trim()}"`)).join(', ')).catch(() => '');
+      if (held) await ctx.log?.(`refused with: ${held}`);
       const why = await visibleErrors(root());
       return { status: 'blocked', error: `the form did not move on${why ? `: ${why}` : ' (no error shown)'}`, portalUrl: page.url() };
     }

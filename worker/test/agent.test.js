@@ -55,6 +55,12 @@ test('isPageFurniture: job alerts, newsletter, site search and sidebars are skip
   assert.equal(isPageFurniture(node({ form: { action: '/search' } })), true);
 });
 
+test('isPageFurniture: bot traps are never typed into (Workday "beecatcher", "leave this field blank")', () => {
+  assert.equal(isPageFurniture(node({ attrs: { 'data-automation-id': 'beecatcher', 'aria-label': 'Enter website. This input is for robots only, do not enter if you\'re human.' } })), true);
+  assert.equal(isPageFurniture(node({ labels: ['Please leave this field blank'] })), true);
+  assert.equal(isPageFurniture(node({ labels: ['Website, Blog or Portfolio'] })), false);
+});
+
 test('isPageFurniture: real application fields are kept, including Workday "Search" typeaheads', () => {
   assert.equal(isPageFurniture(node({ type: 'email', labels: ['Email'], form: { id: 'application-form', action: '/apply' } })), false);
   assert.equal(isPageFurniture(node({ attrs: { placeholder: 'Search', 'data-automation-id': 'searchBox' } })), false);
