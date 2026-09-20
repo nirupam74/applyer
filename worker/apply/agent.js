@@ -194,6 +194,8 @@ async function fillTextInputs(root, ctx, out) {
     const role = await el.getAttribute('role').catch(() => null);
     if (role === 'combobox') continue; // handled by fillReactSelects, never both
     const current = await el.inputValue().catch(() => '');
+    // Phenom restores the saved draft, "none" in Phone Extension included, and keeps refusing it.
+    if (/^(none|n\/?a|nil)\.?$/i.test(current.trim()) && !(await isRequired(el))) { await el.fill('').catch(() => {}); continue; }
     if (current.trim()) continue;
     // Workday multi-select (country phone code): its search box is always empty, the choice sits
     // beside it as a pill. Typing again every round re-opened the list over the phone field.
@@ -685,7 +687,9 @@ async function handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields) {
       }
     }
 
-    const fields = await fillGenericForm(page, root, ctx, docs);
+    // The fillers query with $$, which a Locator does not have ("root.$$ is not a function" ended
+    // every Easy Apply): hand them the modal's element, re-resolved each step.
+    const fields = await fillGenericForm(page, root === page ? page : ((await root.elementHandle().catch(() => null)) || page), ctx, docs);
     allFields.push(...fields);
     await recordFields(appRef, fields);
     await takeShot(page, appRef, screenshots);
@@ -700,8 +704,6 @@ async function handleLinkedIn(page, ctx, docs, appRef, screenshots, allFields) {
       }
       if (ctx._requiredGap) return { status: 'blocked', error: 'required field(s) left empty' };
       if (!ctx.autoSubmit) return { status: 'ready', portalUrl: page.url() };
-      const still = captchaInForm && (await waitForHuman(page, ctx, pause));
-      if (still) return { status: 'blocked', error: still, portalUrl: page.url() };
       const result = await submitAndVerify(page, submitBtn);
       await takeShot(page, appRef, screenshots);
       if (!result.ok) return { status: 'blocked', error: result.reason, portalUrl: page.url() };
