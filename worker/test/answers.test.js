@@ -62,6 +62,13 @@ test('canadianPostal: the spaced form every validator accepts; other values unto
   assert.equal(canadianPostal('Brampton'), 'Brampton');
 });
 
+test('applyRules: "age of majority" is not the major rule; "legally entitled to work" is work authorization', () => {
+  const p = { education: [{ major: 'Digital Enterprise Management' }], workAuthorization: 'Canadian citizen' };
+  assert.equal(applyRules(p, {}, 'A requirement of this position is to have reached the federal age of majority, which is 18 years old. Do you meet this requirement?'), null);
+  assert.equal(applyRules(p, {}, 'Are you legally entitled to work in Canada?'), 'Yes');
+  assert.equal(applyRules(p, {}, 'Major'), 'Digital Enterprise Management');
+});
+
 test('applyRules: unmatched question returns null (never invents an answer)', () => {
   assert.equal(applyRules({}, {}, 'Why do you want to work here?'), null);
 });

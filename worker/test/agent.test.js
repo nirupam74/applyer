@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { postingMatches, isPageFurniture, lazyDocs, roleKey, nationalDigits } from '../apply/agent.js';
+import { postingMatches, isPageFurniture, lazyDocs, roleKey, nationalDigits, skillTerms } from '../apply/agent.js';
 
 const intern = { title: 'Digital Marketing Intern', company: 'RBC' };
 
@@ -127,4 +127,9 @@ test('nationalDigits: the number a form with its own country-code box accepts', 
   assert.equal(nationalDigits('+1 (647) 642-3609'), '6476423609');
   assert.equal(nationalDigits('647-642-3609'), '6476423609');
   assert.equal(nationalDigits('+44 20 7946 0958'), '442079460958');
+});
+
+test('skillTerms: profile skill phrases become short search terms, no duplicates', () => {
+  const terms = skillTerms({ skills: { communication: ['Executive presentations (PowerPoint)'], marketing: ['SEO', 'SEO'], odd: [42] } });
+  assert.deepEqual(terms, ['Executive presentations', 'PowerPoint', 'SEO']);
 });

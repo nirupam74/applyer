@@ -195,6 +195,7 @@ async function fillTextInputs(root, ctx, out) {
     if (!(await isUsable(el))) continue;
     const role = await el.getAttribute('role').catch(() => null);
     if (role === 'combobox') continue; // handled by fillReactSelects, never both
+    if ((await el.getAttribute('data-uxi-widget-type').catch(() => null)) === 'selectinput') continue; // fillWorkdayPrompts
     const current = await el.inputValue().catch(() => '');
     // Phenom restores the saved draft, "none" in Phone Extension included, and keeps refusing it.
     if (/^(none|n\/?a|nil)\.?$/i.test(current.trim()) && !(await isRequired(el))) { await el.fill('').catch(() => {}); continue; }
@@ -210,9 +211,13 @@ async function fillTextInputs(root, ctx, out) {
     // Workday multi-select (country phone code): its search box is always empty, the choice sits
     // beside it as a pill. Typing again every round re-opened the list over the phone field.
     if (await el.evaluate((e) => !!e.closest('[data-automation-id="multiSelectContainer"]')?.querySelector('[data-automation-id="selectedItem"]')).catch(() => false)) continue;
-    const label = await labelFor(el);
+    let label = await labelFor(el);
     if (!label) continue;
-    const { value, confidence } = await getAnswer(ctx, label);
+    // Workday labels both education year boxes just "Year"; the id says which one it is.
+    const yearBox = (await el.getAttribute('id').catch(() => '') || '').match(/(first|last)YearAttended/);
+    if (yearBox) label = yearBox[1] === 'first' ? 'Education: year you started this program (year only)' : 'Education: expected graduation year (year only)';
+    let { value, confidence } = await getAnswer(ctx, label);
+    if (yearBox && value) value = (String(value).match(/(19|20)\d{2}/) || [''])[0];
     // "none" / "N/A" is an answer for a box that must not stay empty. In an optional one (Middle
     // Name, Phone Extension) it is junk, and Workday validates the extension as part of the phone.
     if (value && /^(none|n\/?a|nil)\.?$/i.test(value.trim()) && !(await isRequired(el))) continue;
@@ -288,6 +293,56 @@ async function pickSuggestion(el) {
   }
 }
 
+// Short searchable forms of the profile's skills ("Executive presentations (PowerPoint)" -> both halves).
+export function skillTerms(profile) {
+  const all = Object.values(profile?.skills || {}).flat().filter((x) => typeof x === 'string');
+  return [...new Set(all.flatMap((x) => [x.replace(/\s*\(.*?\)/g, ''), ...[...x.matchAll(/\(([^)]+)\)/g)].map((m) => m[1])]).map((x) => x.trim()).filter((x) => x && x.length <= 30))];
+}
+
+// Workday search prompts (School, Field of Study, Skills, Country Phone Code): type, Enter, then
+// click a result. An exact result wins; otherwise the answer engine picks from what the search
+// returned (the LLM when the profile's wording is not on the list). Skills take several values.
+async function fillWorkdayPrompts(page, root, ctx, out) {
+  const results = () => page.locator('[data-automation-id="promptOption"]:not([data-automation-id="selectedItem"] *)').filter({ visible: true });
+  const search = async (el, text) => {
+    await el.click().catch(() => {}); await el.fill('').catch(() => {});
+    await el.type(text, { delay: 20 }).catch(() => {});
+    await el.press('Enter').catch(() => {});
+    await page.waitForTimeout(2500);
+    return [...new Set((await results().allInnerTexts().catch(() => [])).map((t) => t.trim()).filter(Boolean))];
+  };
+  const pick = async (text) => { await results().filter({ hasText: new RegExp(`^\\s*${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`) }).first().click({ timeout: 4000 }); await page.waitForTimeout(800); };
+
+  for (const el of await root.$$('input[data-uxi-widget-type="selectinput"]')) {
+    if (!(await isUsable(el))) continue;
+    if (await el.evaluate((e) => !!e.closest('[data-automation-id="multiSelectContainer"]')?.querySelector('[data-automation-id="selectedItem"]')).catch(() => false)) continue;
+    const label = await labelFor(el);
+    if (!label) continue;
+    try {
+      if (/skill/i.test(label)) {
+        const added = [];
+        for (const term of skillTerms(ctx.profile).slice(0, 14)) {
+          if (added.length >= 8) break;
+          const hit = (await search(el, term)).find((o) => o.toLowerCase() === term.toLowerCase());
+          if (hit) { await pick(hit); added.push(hit); }
+        }
+        if (added.length) out.push({ name: label, value: added.join(', '), confidence: 'green' });
+      } else {
+        const first = await getAnswer(ctx, label);
+        const options = first.value ? await search(el, first.value) : [];
+        const exact = options.find((o) => o.toLowerCase() === String(first.value).toLowerCase());
+        const chosen = exact ? { value: exact, confidence: first.confidence } : options.length ? await getAnswer(ctx, label, options.slice(0, 200)) : { value: null };
+        if (chosen.value) { await pick(chosen.value); out.push({ name: label, value: chosen.value, confidence: chosen.confidence }); }
+        else { out.push({ name: label, value: '', confidence: 'red' }); if (/\*/.test(label)) ctx._requiredGap = true; }
+      }
+    } catch {
+      out.push({ name: label, value: '', confidence: 'red' });
+    }
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(300);
+  }
+}
+
 // Workday dropdowns: a button that opens a listbox ("Select One"). Open it, read the options,
 // pick the answer by its exact text.
 async function fillListboxButtons(page, root, ctx, out) {
@@ -295,16 +350,21 @@ async function fillListboxButtons(page, root, ctx, out) {
     if (!(await isUsable(btn))) continue;
     const shown = (await btn.innerText().catch(() => '')).trim();
     if (shown && !/^select( one)?$/i.test(shown)) continue; // already chosen
-    const label = (await labelFor(btn)).replace(/\s*select one.*$/i, '').trim();
+    // Questionnaire dropdowns carry only aria-label=" Select One Required"; the question is the fieldset's legend.
+    const label = (await labelFor(btn)).replace(/\s*select one.*$/i, '').trim()
+      || (await btn.evaluate((e) => (e.closest('fieldset')?.querySelector('legend')?.innerText || '').replace(/\s+/g, ' ').trim()).catch(() => ''));
     if (!label) continue;
     try {
       await btn.click();
-      const opts = page.locator('[role="listbox"] [role="option"]').filter({ visible: true });
+      // (Pills of a neighbouring multi-select are role=option too: "Marketing" showed up as a Degree.)
+      const opts = page.locator('[role="listbox"] [role="option"]:not([data-automation-id="multiSelectContainer"] *)').filter({ visible: true });
       await opts.first().waitFor({ state: 'visible', timeout: 4000 });
+      await page.waitForTimeout(500); // "Select One" renders first, the real options a moment later
       const options = (await opts.allInnerTexts()).map((t) => t.trim()).filter((t) => t && !/^select one$/i.test(t));
-      const { value, confidence } = await getAnswer(ctx, label, options);
+      // No options read = nothing to choose from; asking without them returns free text that is not on the list.
+      const { value, confidence } = options.length ? await getAnswer(ctx, label, options) : { value: null };
       if (value) {
-        await opts.getByText(value, { exact: true }).first().click();
+        await opts.getByText(value, { exact: true }).first().click({ timeout: 4000 });
         out.push({ name: label, value, confidence });
       } else {
         await page.keyboard.press('Escape').catch(() => {});
@@ -339,6 +399,9 @@ async function fillNativeSelects(root, ctx, out) {
 async function fillReactSelects(page, root, ctx, out) {
   for (const cb of await root.$$('[role=combobox]')) {
     if (!(await isUsable(cb))) continue;
+    // Workday's question dropdowns are <button role=combobox aria-haspopup=listbox>: nothing can be
+    // typed into a button, and trying left every one of them on "Select One". fillListboxButtons has them.
+    if (await cb.evaluate((e) => e.tagName === 'BUTTON').catch(() => false)) continue;
     const label = await labelFor(cb);
     if (!label) continue;
     const { value, confidence } = await getAnswer(ctx, label);
@@ -490,6 +553,7 @@ async function fillGenericForm(page, root, ctx, docs) {
   await fillTextInputs(root, ctx, out);
   await fillNativeSelects(root, ctx, out);
   await fillReactSelects(page, root, ctx, out);
+  await fillWorkdayPrompts(page, root, ctx, out);
   await fillListboxButtons(page, root, ctx, out);
   await fillRadioGroups(root, ctx, out);
   await fillCheckboxes(root, ctx, out);
@@ -992,8 +1056,17 @@ async function handleGeneric(page, ctx, docs, appRef, screenshots, allFields) {
   const root = () => page.frame({ name: 'icims_content_iframe' }) || page;
   const hasAccounts = () => /workday/i.test(host) || root() !== page;
   let lastStep = null;
+  let refreshes = 0;
   for (let step = 0; step < MAX_STEPS; step++) {
     await settle(page); // single-page ATSs render well after load; never scan a blank shell
+    // Workday's error page after a sign-in: "Something went wrong. Please refresh the page and then try again."
+    if (refreshes < 2 && /something went wrong[\s\S]{0,80}refresh/i.test(await root().evaluate(() => document.body.innerText.slice(0, 4000)).catch(() => ''))) {
+      refreshes++;
+      await ctx.log?.('the site showed its "something went wrong, refresh" page: refreshing');
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      await page.waitForTimeout(5000);
+      continue;
+    }
     let pause = await detectPause(root(), ctx);
     // A CAPTCHA beside a form's Submit is left for last in a visible run: its token expires about
     // two minutes after it is solved, so the form is filled first. A full-page challenge (no

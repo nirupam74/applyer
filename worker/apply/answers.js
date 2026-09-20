@@ -66,7 +66,7 @@ const RULES = [
   { re: /linkedin/i, get: (p) => p.personal?.linkedin },
   { re: /portfolio|personal site|website/i, get: (p) => p.personal?.portfolio || p.personal?.website },
   {
-    re: /legally eligible|authorized to work|eligible to work|right to work|work authorization|authorized to be employed/i,
+    re: /legally (eligible|entitled)|(authorized|eligible|entitled) to work|right to work|work authorization|authorized to be employed/i,
     get: (p) => yesNo(classifyWorkAuth(p.workAuthorization).authorized),
   },
   {
@@ -88,7 +88,8 @@ const RULES = [
   // The profile stores a span ("Sept 2023 - June 2028 (expected)"); a graduation question wants its end.
   { re: /graduation/i, get: (p) => { const g = p.education?.[0]?.graduation; const m = [...String(g || '').matchAll(/([A-Za-z]{3,9})\.? (\d{4})/g)].pop(); return m ? `${m[1]} ${m[2]}` : g; } },
   { re: /degree/i, get: (p) => p.education?.[0]?.degree },
-  { re: /major|field of study|discipline/i, get: (p) => p.education?.[0]?.major || p.education?.[0]?.program },
+  // \bmajor\b: "the federal age of majority" is not a question about a major.
+  { re: /\bmajor\b|field of study|discipline/i, get: (p) => p.education?.[0]?.major || p.education?.[0]?.program },
   { re: /school|university|institution|college/i, get: (p) => p.education?.[0]?.institution },
   { re: /pronoun/i, get: (p) => p.demographics?.pronouns || 'Prefer not to answer' },
   { re: /gender/i, get: (p) => p.demographics?.gender || 'Prefer not to answer' },
@@ -201,7 +202,9 @@ async function recordQuestion(db, uid, question, answer, options) {
 
 // ---- LLM fallback for free text / essay questions --------------------------
 async function llmAnswer(question, profile, job, options) {
-  const optCtx = options && options.length ? `\nChoose one of these exact options if one applies: ${JSON.stringify(options)}` : '';
+  // "closest": a list rarely carries the profile's own wording ("Digital Enterprise Management" is on
+  // nobody's Field of Study list), and "none applies" left required dropdowns empty.
+  const optCtx = options && options.length ? `\nAnswer with the text of exactly one of these options, the closest true one; null only when every option would be false: ${JSON.stringify(options)}` : '';
   const jobCtx = job ? `\n\nJob: ${job.title || ''} at ${job.company || ''}\n${String(job.description || '').slice(0, 3000)}` : '';
   const prompt =
     `A job application form asks the candidate this question. Answer briefly using only facts present in the ` +
@@ -225,9 +228,11 @@ export async function getAnswer({ db, uid, profile, settings, job }, question, o
   // answer (it must not shadow a rule), then the LLM.
   const bank = await bankMatch(db, uid, question);
   if (bank?.trusted) {
+    // A banked answer was given against some other form's list: only an exact option counts here.
+    // ("Degree", picked from Manulife's options, fuzzy-matched TD's "Professional Degree".)
     const res = withOptions(bank.answer, options, 'green');
     await record('');
-    if (res.value) return res;
+    if (res.value && res.confidence !== 'red') return res;
   }
 
   // "How did you hear about us?": the board this job was found on. Not a profile fact, so not in RULES.
@@ -251,7 +256,7 @@ export async function getAnswer({ db, uid, profile, settings, job }, question, o
   if (bank && !bank.trusted) {
     const res = withOptions(bank.answer, options, 'yellow');
     await record('');
-    if (res.value) return res;
+    if (res.value && res.confidence !== 'red') return res;
   }
 
   try {
