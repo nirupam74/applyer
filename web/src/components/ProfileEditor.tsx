@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { Education, Experience, Profile, Project, Skills, StructuredResume } from '../lib/types'
 
 export type EditableResume = Profile | StructuredResume
@@ -187,6 +187,16 @@ export default function ProfileEditor<T extends EditableResume>({ value, onChang
         />
       </Section>
 
+      {([
+        ['publications', 'Publications', 'One full citation per line, newest first. Include manuscripts in preparation or under review, marked as such.'],
+        ['awards', 'Honours & Awards', 'One per line: scholarships, awards, certifications and licences, with the year.'],
+        ['volunteer', 'Volunteer Experience', 'One per line: role, organisation, dates.'],
+      ] as const).map(([key, title, hint]) => (
+        <Section key={key} title={title}>
+          <LinesField hint={hint} values={value[key] ?? []} onChange={(v) => set(key as keyof T, v as T[keyof T])} />
+        </Section>
+      ))}
+
       <Section title="Skills">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {(Object.keys(skillLabels) as (keyof Skills)[]).map((cat) => (
@@ -331,6 +341,30 @@ function TextField({
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
         />
       )}
+    </div>
+  )
+}
+
+// A list edited as text, one entry per line. Chips split on commas, and a citation is full of them.
+// The text is only split when the box loses focus, so blank lines can be typed on the way.
+function LinesField({ hint, values, onChange }: { hint: string; values: string[]; onChange: (v: string[]) => void }) {
+  const joined = values.join('\n')
+  const [draft, setDraft] = useState(joined)
+  useEffect(() => setDraft(joined), [joined])
+
+  return (
+    <div>
+      <p className="mb-1 text-xs text-[var(--text-muted)]">{hint}</p>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          const next = draft.split('\n').map((s) => s.trim()).filter(Boolean)
+          if (next.join('\n') !== joined) onChange(next)
+        }}
+        rows={Math.min(16, Math.max(3, values.length + 1))}
+        className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+      />
     </div>
   )
 }

@@ -83,6 +83,10 @@ export interface Profile {
   education: Education[]
   experience: Experience[]
   projects: Project[]
+  // Academic CV sections: one line per entry, kept as written (worker resume/extract.js).
+  publications?: string[]
+  awards?: string[]
+  volunteer?: string[]
   skills: Skills
   preferences: Preferences
   workAuthorization: string
@@ -104,6 +108,10 @@ export interface StructuredResume {
   education: Education[]
   experience: Experience[]
   projects: Project[]
+  // Academic CV sections: one line per entry, kept as written (worker resume/extract.js).
+  publications?: string[]
+  awards?: string[]
+  volunteer?: string[]
   skills: Skills
 }
 
