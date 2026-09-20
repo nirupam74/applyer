@@ -85,13 +85,13 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
 
   // A version that already fits the page is the length template. Tailoring from the raw profile
   // overshot the page by about 13 lines every time and paid for 2-3 condensing rounds (3 minutes).
-  // ponytail: the template may itself be a tailored version; keep one canonical untailored fit if wording drifts.
-  const validFrom = profile.updatedAt?.toMillis?.() || 0;
-  const recent = await userRef.collection('resumeVersions').orderBy('createdAt', 'desc').limit(10).select('structured', 'fits', 'pageLimit', 'createdAt').get();
-  const fitted = recent.docs.map((d) => d.data()).find((v) => v.fits && v.pageLimit === pageLimit && v.structured && (v.createdAt?.toMillis?.() || 0) >= validFrom)?.structured;
+  // It only guides size (the facts come from the profile), so one older than the last profile edit
+  // is fine: without any template a 2-page CV overshot by 48 lines and never got back under the limit.
+  const recent = await userRef.collection('resumeVersions').orderBy('createdAt', 'desc').limit(30).select('structured', 'fits', 'pageLimit', 'createdAt', 'ats', 'jobId').get();
+  const fitted = pickTemplate(recent.docs.map((d) => d.data()), pageLimit)?.structured;
 
   // The cover letter does not depend on the resume: both LLM calls run at once.
-  await log(`tailoring resume${fitted ? ' (from the last one-page fit)' : ''} and writing cover letter for ${job.title} at ${job.company}`);
+  await log(`tailoring resume${fitted ? ' (sized from the best fitting version)' : ''} and writing cover letter for ${job.title} at ${job.company}`);
   const analysis = job.analysis || {};
   const clShape = '{"paragraphs": string[] (3-4 paragraphs), "closing": string (one closing sentence before the sign-off)}';
   const clPrompt = [
@@ -166,6 +166,15 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   await userRef.collection('jobs').doc(jobId).update({ docs: { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, preparedAt: FieldValue.serverTimestamp() } }).catch(() => {});
 
   return { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, resumePath, coverPath, email: applicationEmail };
+}
+
+// The member's most optimised resume that fills the page limit: untailored before tailored,
+// then the best ATS score, then the newest.
+export function pickTemplate(versions, pageLimit) {
+  const ms = (v) => v.createdAt?.toMillis?.() || 0;
+  return versions
+    .filter((v) => v.fits && v.pageLimit === pageLimit && v.structured)
+    .sort((a, b) => !!a.jobId - !!b.jobId || (b.ats?.score || 0) - (a.ats?.score || 0) || ms(b) - ms(a))[0];
 }
 
 // prepareBatch({ db, uid, log }, { minScore?, limit? })

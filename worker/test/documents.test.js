@@ -50,3 +50,12 @@ test('isRepeat: a second press while the first task is unfinished is a repeat; a
   assert.equal(isRepeat(b, [b, { id: 'c', type: 'searchJobs', payload: {}, createdAt: at(300), status: 'queued' }]), false, 'c is newer');
   assert.equal(isRepeat(b, [b, { id: 'a', type: 'searchJobs', payload: { sources: ['linkedin'] }, createdAt: at(100), status: 'running' }]), false, 'different payload');
 });
+
+test('pickTemplate: untailored before tailored, then best ATS, only versions that fit this page limit', async () => {
+  const { pickTemplate } = await import('../apply/documents.js');
+  const v = (id, o) => ({ id, fits: true, pageLimit: 2, structured: {}, ...o });
+  const pick = (list) => pickTemplate(list, 2)?.id;
+  assert.equal(pick([v('tailored', { jobId: 'j', ats: { score: 95 } }), v('low', { ats: { score: 78 } }), v('best', { ats: { score: 80 } })]), 'best');
+  assert.equal(pick([v('overflow', { fits: false, ats: { score: 99 } }), v('onepage', { pageLimit: 1 }), v('tailored', { jobId: 'j' })]), 'tailored');
+  assert.equal(pick([]), undefined);
+});

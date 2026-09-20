@@ -132,7 +132,7 @@ export async function optimizeResume({ profile, originalText, existingStructured
     : 'No deterministic problems were detected.';
 
   const jobBlock = job && (job.title || job.company || job.description)
-    ? `TARGET JOB (reorder and reword the summary and experience bullets to best target this job, using only facts already present in the profile; never invent anything):\nTitle: ${job.title || ''}\nCompany: ${job.company || ''}\nDescription:\n${job.description || ''}`
+    ? `TARGET JOB (reorder and reword the summary and experience bullets to best target this job, using only facts already present in the profile; never invent anything. Cover the posting: for every requirement, duty, tool and keyword in the description that the profile truthfully supports, say so in the posting's own words, in the summary, the bullets or the skill lines, most important first. A requirement the profile does not support is left out, never claimed):\nTitle: ${job.title || ''}\nCompany: ${job.company || ''}\nDescription:\n${job.description || ''}`
     : '';
 
   const base = existingStructured ? normalizeStructured(existingStructured) : emptyStructured();

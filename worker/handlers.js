@@ -171,6 +171,20 @@ export async function fitToPages({ structured, profile, pageLimit, log }) {
       current = await condenseStructured({ structured: current, profile, pages: last.pages, targetPages: pageLimit, overflowLines, totalLines });
     }
   }
+  // Last resort, no LLM: drop whole lines from the least important sections until it fits.
+  const cut = structuredClone(last.structured);
+  const level = FIT_LEVELS.length - 1;
+  for (let i = 0; i < 80; i++) {
+    const key = ['volunteer', 'awards', 'projects'].find((k) => (cut[k] || []).length > (k === 'awards' ? 3 : 0));
+    if (!key) break;
+    cut[key].pop();
+    const docx = await buildDocx(cut, personal, { ...opts, level });
+    const { pdf, pages, linesPerPage } = await docxToPdf(docx);
+    if (pages <= pageLimit) {
+      await log(`fitted ${pageLimit} page(s) by dropping ${i + 1} volunteer / award / project line(s)`);
+      return { docx, pdf, pages, linesPerPage, structured: cut, level, round: 4 };
+    }
+  }
   await log(`could not fit within ${pageLimit} page(s); keeping the shortest version (${best.pages} pages)`);
   return best;
 }
