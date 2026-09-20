@@ -16,6 +16,7 @@ const navItems = [
   { to: '/applications', label: 'Applications' },
   { to: '/resume', label: 'Resume' },
   { to: '/profile', label: 'Profile' },
+  { to: '/assistant', label: 'Assistant' },
 ]
 
 export default function Shell() {

@@ -1,7 +1,7 @@
 import type { Bytes, Timestamp } from 'firebase/firestore'
 
 export interface Task {
-  type: 'parseResume' | 'optimizeResume' | 'searchJobs' | 'prepareDocuments' | 'prepareBatch' | 'applyToJob' | 'applyBatch'
+  type: 'parseResume' | 'optimizeResume' | 'searchJobs' | 'prepareDocuments' | 'prepareBatch' | 'applyToJob' | 'applyBatch' | 'assistant'
   payload: Record<string, unknown>
   status: 'queued' | 'running' | 'done' | 'failed'
   log: string[]

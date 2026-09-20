@@ -9,6 +9,7 @@ import JobDetail from './pages/JobDetail'
 import Jobs from './pages/Jobs'
 import Login from './pages/Login'
 import Profile from './pages/Profile'
+import Assistant from './pages/Assistant'
 import Resume from './pages/Resume'
 import Shell from './pages/Shell'
 
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="resume" element={<Resume />} />
         <Route path="answers" element={<Answers />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="assistant" element={<Assistant />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

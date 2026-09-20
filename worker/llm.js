@@ -17,7 +17,7 @@ export const TRUTHFULNESS_RULE =
 // dropping the file in needs no restart. With no key the worker falls back to the claude CLI
 // (the owner's own login), which is how it ran before.
 const KEY_FILE = path.join(os.homedir(), '.applyer', 'anthropic.key');
-const MODEL = process.env.APPLYER_MODEL || 'claude-sonnet-5'; // the CLI path always ran "sonnet"
+export const MODEL = process.env.APPLYER_MODEL || 'claude-sonnet-5'; // the CLI path always ran "sonnet"
 
 export function apiKey() {
   if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY.trim();
