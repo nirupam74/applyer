@@ -5,6 +5,8 @@ import TaskStatus from '../components/TaskStatus'
 import { SOURCES, SOURCE_LABEL, daysAgo, postedLabel, useJobs, useSourceRuns, type JobRow } from '../lib/jobs'
 import { enqueueTask } from '../lib/tasks'
 
+const MIN_SCORE = 70 // weaker matches are not shown; the agent applies at 80 (worker MIN_APPLY_SCORE)
+
 const WORK_MODES = ['remote', 'hybrid', 'onsite', 'unknown'] as const
 const STATUSES = ['new', 'saved', 'dismissed', 'applied'] as const
 
@@ -23,7 +25,7 @@ export default function Jobs() {
   const [taskId, setTaskId] = useState<string | null>(null)
 
   const [q, setQ] = useState('')
-  const [minScore, setMinScore] = useState(0)
+  const [minScore, setMinScore] = useState(MIN_SCORE)
   const [workMode, setWorkMode] = useState('')
   const [source, setSource] = useState('')
   const [status, setStatus] = useState('')
@@ -39,7 +41,7 @@ export default function Jobs() {
     return (jobs ?? []).filter((j) => {
       if (rankedOnly && j.rank == null && j.status !== 'saved') return false
       if (needle && !`${j.title} ${j.company} ${j.location}`.toLowerCase().includes(needle)) return false
-      if (j.score < minScore) return false
+      if (!(j.score >= Math.max(minScore, MIN_SCORE))) return false
       if (workMode && j.workMode !== workMode) return false
       if (source && !j.sources.some((s) => s.name === source)) return false
       if (status ? j.status !== status : j.status === 'dismissed') return false
@@ -65,7 +67,7 @@ export default function Jobs() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">Jobs</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Every job found, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 80 or higher.
+            Jobs scoring 70 or higher, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 80 or higher.
           </p>
         </div>
         <button
@@ -103,7 +105,7 @@ export default function Jobs() {
         />
         <label className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
           Score ≥
-          <input type="number" min={0} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value) || 0)} className={`${select} w-16`} />
+          <input type="number" min={MIN_SCORE} max={100} value={minScore} onChange={(e) => setMinScore(Number(e.target.value) || MIN_SCORE)} className={`${select} w-16`} />
         </label>
         <select value={workMode} onChange={(e) => setWorkMode(e.target.value)} className={select}>
           <option value="">Any work mode</option>
