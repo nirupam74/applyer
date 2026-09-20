@@ -36,7 +36,10 @@ export default function Assistant() {
     [uid],
   )
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages])
+  // Braces matter: newer Chrome returns a Promise from scrollIntoView, and React calls whatever an effect returns as its cleanup.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   const waiting = !!messages?.length && messages[messages.length - 1].role === 'user'
 
