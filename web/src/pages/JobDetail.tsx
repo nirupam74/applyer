@@ -1,14 +1,13 @@
-import { onSnapshot } from 'firebase/firestore'
+import { getDoc, onSnapshot } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useUser } from '../auth'
 import TaskStatus from '../components/TaskStatus'
-import { useApplicationForJob } from '../lib/applications'
-import { SOURCE_LABEL, postedLabel, setJobStatus } from '../lib/jobs'
-import { safeUrl } from '../lib/download'
+import { SOURCE_LABEL, TRACKED, postedLabel, setJobStatus } from '../lib/jobs'
+import { downloadBytes, safeUrl } from '../lib/download'
 import { userDoc } from '../lib/paths'
 import { enqueueTask } from '../lib/tasks'
-import type { Job } from '../lib/types'
+import type { CoverLetter, Job, ResumeVersion } from '../lib/types'
 import { ScorePill, StatusPill } from './Jobs'
 
 export default function JobDetail() {
@@ -16,17 +15,27 @@ export default function JobDetail() {
   const uid = user!.uid
   const { id } = useParams()
   const [job, setJob] = useState<Job | null | undefined>(undefined)
-  const [applyTaskId, setApplyTaskId] = useState<string | null>(null)
-  const existingApplication = useApplicationForJob(uid, id ?? '')
+  const [prepTaskId, setPrepTaskId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
     return onSnapshot(userDoc(uid, 'jobs', id), (snap) => setJob(snap.exists() ? (snap.data() as Job) : null))
   }, [uid, id])
 
-  async function applyNow() {
+  async function prepare() {
     if (!id) return
-    setApplyTaskId(await enqueueTask(uid, 'applyToJob', { jobId: id }))
+    setPrepTaskId(await enqueueTask(uid, 'prepareDocuments', { jobId: id }))
+  }
+
+  // Fetched on click: each document carries up to ~1 MB of file bytes.
+  async function download(kind: 'resume' | 'cover', ext: 'pdf' | 'docx') {
+    if (!job?.docs) return
+    const snap = await getDoc(kind === 'resume' ? userDoc(uid, 'resumeVersions', job.docs.resumeVersionId) : userDoc(uid, 'coverLetters', job.docs.coverLetterId))
+    const d = snap.data() as ResumeVersion | CoverLetter | undefined
+    const bytes = ext === 'pdf' ? d?.pdfBytes : d?.docxBytes
+    if (!d || !bytes) return
+    const mime = ext === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    downloadBytes(bytes.toUint8Array(), mime, `${d.fileName || (kind === 'resume' ? 'Resume' : 'Cover Letter')}.${ext}`)
   }
 
   if (job === undefined) return <p className="text-sm text-[var(--text-muted)]">Loading...</p>
@@ -62,23 +71,23 @@ export default function JobDetail() {
               </a>
             ))}
           </p>
-          {existingApplication && (
-            <p className="mt-1 text-xs text-[var(--text-muted)]">
-              Applied ·{' '}
-              <Link to={`/applications/${existingApplication.id}`} className="text-[var(--accent)] hover:underline">
-                view application
-              </Link>
-            </p>
-          )}
+          {job.appliedAt && <p className="mt-1 text-xs text-[var(--text-muted)]">Applied {job.appliedAt.toDate().toLocaleDateString()}</p>}
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={() => void applyNow()} className={`${btn} bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]`}>
-            Apply now
-          </button>
           {apply && (
-            <a href={apply} target="_blank" rel="noreferrer" className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
-              Apply
+            <a href={apply} target="_blank" rel="noreferrer" className={`${btn} bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]`}>
+              Open posting
             </a>
+          )}
+          {TRACKED.includes(job.status) ? (
+            <select value={job.status} onChange={(e) => void setJobStatus(uid, id, e.target.value as Job['status'])} className={`${btn} border border-[var(--border)] bg-[var(--bg-elevated)] capitalize text-[var(--text)]`}>
+              {TRACKED.map((s) => <option key={s} value={s}>{s}</option>)}
+              <option value="saved">not applied</option>
+            </select>
+          ) : (
+            <button type="button" onClick={() => void setJobStatus(uid, id, 'applied')} className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
+              Mark applied
+            </button>
           )}
           <button type="button" onClick={() => setJobStatus(uid, id, job.status === 'saved' ? 'new' : 'saved')} className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
             {job.status === 'saved' ? 'Unsave' : 'Save'}
@@ -89,7 +98,29 @@ export default function JobDetail() {
         </div>
       </div>
 
-      {applyTaskId && <TaskStatus uid={uid} taskId={applyTaskId} />}
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text)]">Your documents for this job</h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              {job.docs ? `Tailored resume and cover letter, made ${job.docs.preparedAt.toDate().toLocaleString()}.` : 'No tailored resume or cover letter yet. Making them takes about two minutes.'}
+            </p>
+          </div>
+          <button type="button" onClick={() => void prepare()} className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
+            {job.docs ? 'Make again' : 'Make resume + cover letter'}
+          </button>
+        </div>
+        {job.docs && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {([['resume', 'pdf', 'Resume PDF'], ['resume', 'docx', 'Resume DOCX'], ['cover', 'pdf', 'Cover letter PDF'], ['cover', 'docx', 'Cover letter DOCX']] as const).map(([kind, ext, label]) => (
+              <button key={label} type="button" onClick={() => void download(kind, ext)} className={`${btn} bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--bg-sunken)]`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {prepTaskId && <div className="mt-3"><TaskStatus uid={uid} taskId={prepTaskId} /></div>}
+      </section>
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5">
         <h2 className="text-base font-semibold text-[var(--text)]">Resume-to-job analysis</h2>

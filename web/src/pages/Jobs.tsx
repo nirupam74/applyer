@@ -8,7 +8,7 @@ import { enqueueTask } from '../lib/tasks'
 const MIN_SCORE = 70 // weaker matches are not shown; the agent applies at 80 (worker MIN_APPLY_SCORE)
 
 const WORK_MODES = ['remote', 'hybrid', 'onsite', 'unknown'] as const
-const STATUSES = ['new', 'saved', 'dismissed', 'applied'] as const
+const STATUSES = ['new', 'saved', 'dismissed', 'applied', 'interview', 'offer', 'rejected'] as const
 
 const runStyle: Record<string, string> = {
   ok: 'text-[var(--success)]',
@@ -59,6 +59,10 @@ export default function Jobs() {
     setTaskId(await enqueueTask(uid, 'searchJobs', {}))
   }
 
+  async function prepareAll() {
+    setTaskId(await enqueueTask(uid, 'prepareBatch', {}))
+  }
+
   const select = 'rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1.5 text-sm text-[var(--text)]'
 
   return (
@@ -67,16 +71,25 @@ export default function Jobs() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--text)]">Jobs</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">
-            Jobs scoring 70 or higher, ranked from your profile preferences and a resume-to-job analysis. Apply all covers every job scoring 80 or higher.
+            Jobs scoring 70 or higher, ranked from your profile preferences and a resume-to-job analysis. Prepare documents writes a tailored resume and cover letter for every job scoring 80 or higher; you apply yourself from the job page.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={searchNow}
-          className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
-        >
-          Search now
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={prepareAll}
+            className="rounded-lg border border-[var(--border)] px-5 py-2.5 text-sm font-semibold text-[var(--text)] hover:bg-[var(--bg-sunken)]"
+          >
+            Prepare documents
+          </button>
+          <button
+            type="button"
+            onClick={searchNow}
+            className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold text-[var(--accent-fg)] hover:bg-[var(--accent-hover)]"
+          >
+            Search now
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--text-muted)]">
@@ -179,7 +192,10 @@ function Row({ job }: { job: JobRow }) {
       <td className="px-3 py-2 text-[var(--text-muted)]">{job.salary ?? ''}</td>
       <td className="px-3 py-2 text-[var(--text-muted)] whitespace-nowrap">{postedLabel(job)}</td>
       <td className="px-3 py-2 text-[var(--text-muted)]">{job.sources.map((s) => SOURCE_LABEL[s.name] ?? s.name).join(', ')}</td>
-      <td className="px-3 py-2"><StatusPill status={job.status} /></td>
+      <td className="px-3 py-2">
+        <StatusPill status={job.status} />
+        {job.docs && <span className="ml-1 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-xs font-semibold text-[var(--accent)]" title="Tailored resume and cover letter are ready">docs</span>}
+      </td>
     </tr>
   )
 }
@@ -198,6 +214,9 @@ export function StatusPill({ status }: { status: string }) {
     new: 'bg-[var(--accent-soft)] text-[var(--accent)]',
     saved: 'bg-[var(--success-bg)] text-[var(--success)]',
     applied: 'bg-[var(--success-bg)] text-[var(--success)]',
+    interview: 'bg-[var(--warning-bg)] text-[var(--warning)]',
+    offer: 'bg-[var(--success-bg)] text-[var(--success)]',
+    rejected: 'bg-[var(--danger-bg)] text-[var(--danger)]',
     dismissed: 'bg-[var(--bg-sunken)] text-[var(--text-muted)]',
   }
   return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${tone[status] ?? ''}`}>{status}</span>

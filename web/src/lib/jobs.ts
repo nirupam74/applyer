@@ -1,4 +1,4 @@
-import { onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore'
+import { onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { useEffect, useState } from 'react'
 import { userCol, userDoc } from './paths'
 import type { Job, SourceRun } from './types'
@@ -29,8 +29,10 @@ export function useSourceRuns(uid: string) {
   return runs
 }
 
+export const TRACKED: Job['status'][] = ['applied', 'interview', 'offer', 'rejected']
+
 export function setJobStatus(uid: string, id: string, status: Job['status']) {
-  return updateDoc(userDoc(uid, 'jobs', id), { status })
+  return updateDoc(userDoc(uid, 'jobs', id), { status, ...(status === 'applied' ? { appliedAt: serverTimestamp() } : {}) })
 }
 
 export const SOURCES = ['linkedin', 'indeed', 'ziprecruiter', 'glassdoor'] as const

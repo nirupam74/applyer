@@ -162,5 +162,30 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   await fs.writeFile(resumePath, fit.pdf);
   await fs.writeFile(coverPath, clPdf);
 
+  // The dashboard reads this to offer the downloads on the job itself (the user applies by hand).
+  await userRef.collection('jobs').doc(jobId).update({ docs: { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, preparedAt: FieldValue.serverTimestamp() } }).catch(() => {});
+
   return { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, resumePath, coverPath, email: applicationEmail };
+}
+
+// prepareBatch({ db, uid, log }, { minScore?, limit? })
+// Tailored resume + cover letter for every strong match that has none yet (or whose documents
+// predate the last profile change), best first, one at a time: LibreOffice and the LLM CLI do not
+// like company.
+export async function prepareBatch({ db, uid, log }, payload = {}) {
+  const userRef = db.collection('users').doc(uid);
+  const minScore = payload.minScore || 80;
+  const profileSnap = await userRef.collection('profile').doc('profile').get();
+  const validFrom = profileSnap.data()?.updatedAt?.toMillis?.() || 0;
+  const snap = await userRef.collection('jobs').where('score', '>=', minScore).orderBy('score', 'desc').get();
+  const todo = snap.docs.filter((d) => {
+    const j = d.data();
+    return ['new', 'saved'].includes(j.status || 'new') && !((j.docs?.preparedAt?.toMillis?.() || 0) > validFrom);
+  }).slice(0, payload.limit || 50);
+  let prepared = 0; const failed = [];
+  for (const d of todo) {
+    await log(`documents ${prepared + failed.length + 1} of ${todo.length}: ${d.data().title} at ${d.data().company}`);
+    try { await prepareDocuments({ db, uid, log }, { jobId: d.id }); prepared++; } catch (err) { failed.push(`${d.data().company}: ${err.message.split('\n')[0]}`); await log(`failed: ${err.message.split('\n')[0]}`); }
+  }
+  return { total: todo.length, prepared, failed };
 }

@@ -15,7 +15,6 @@ const navItems = [
   { to: '/jobs', label: 'Jobs' },
   { to: '/applications', label: 'Applications' },
   { to: '/resume', label: 'Resume' },
-  { to: '/answers', label: 'Answers' },
   { to: '/profile', label: 'Profile' },
 ]
 

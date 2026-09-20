@@ -1,7 +1,7 @@
 import type { Bytes, Timestamp } from 'firebase/firestore'
 
 export interface Task {
-  type: 'parseResume' | 'optimizeResume' | 'searchJobs' | 'prepareDocuments' | 'applyToJob' | 'applyBatch'
+  type: 'parseResume' | 'optimizeResume' | 'searchJobs' | 'prepareDocuments' | 'prepareBatch' | 'applyToJob' | 'applyBatch'
   payload: Record<string, unknown>
   status: 'queued' | 'running' | 'done' | 'failed'
   log: string[]
@@ -205,7 +205,12 @@ export interface Job {
   matchPct: number | null
   analysis: JobAnalysis | null
   rank: number | null
-  status: 'new' | 'saved' | 'dismissed' | 'applied'
+  // new/saved/dismissed = triage; applied onward = the user's own applications, tracked by hand
+  status: 'new' | 'saved' | 'dismissed' | 'applied' | 'interview' | 'offer' | 'rejected'
+  appliedAt?: Timestamp
+  notes?: string
+  // tailored resume + cover letter made by the worker for this job
+  docs?: { resumeVersionId: string; coverLetterId: string; preparedAt: Timestamp }
   discoveredAt: Timestamp
   updatedAt: Timestamp
 }
