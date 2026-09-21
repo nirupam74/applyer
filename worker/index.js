@@ -50,9 +50,12 @@ async function watchUser(uid) {
       const ms = (c) => c.doc.data().createdAt?.toMillis?.() ?? Infinity;
       for (const change of snapshot.docChanges().sort((x, y) => ms(x) - ms(y))) {
         if (change.type === 'added' || change.type === 'modified') {
+          // A claim that fails (database quota, network) is tried again: the task is still "queued"
+          // and no new snapshot event will ever announce it.
           const run = () =>
             claimAndRun(uid, change.doc.ref).catch((err) => {
-              log(uid, `unhandled error claiming task ${change.doc.id}: ${err.message}`);
+              log(uid, `claiming task ${change.doc.id} failed, retrying in 5 min: ${err.message}`);
+              setTimeout(() => { heavy = heavy.then(run); }, 5 * 60e3);
             });
           // Chat replies are quick and touch nothing shared; everything else waits its turn.
           if (change.doc.data().type === 'assistant') run();
