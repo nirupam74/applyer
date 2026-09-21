@@ -21,7 +21,8 @@ export async function searchJobs({ db, uid, log }, payload) {
   // Job boards always; a company's own site (it exports its own `queries`) only for members who list it.
   const companySources = (await userRef.collection('settings').doc('jobs').get()).data()?.companySources || [];
   const usual = Object.keys(sources).filter((s) => !sources[s].queries || companySources.includes(s));
-  const wanted = (payload.sources && payload.sources.length ? payload.sources : usual).filter((s) => sources[s]);
+  // analyzeOnly: no scraping, just descriptions + scoring for stored jobs that have none yet.
+  const wanted = payload.analyzeOnly ? [] : (payload.sources && payload.sources.length ? payload.sources : usual).filter((s) => sources[s]);
   await log(`${titles.length} queries in ${locations.map((l) => `"${l}"`).join(', ')}: ${titles.join(' | ')}`);
 
   // 1. Scrape. Each source gets a run doc with status ok | blocked | error.
@@ -132,7 +133,7 @@ export async function searchJobs({ db, uid, log }, payload) {
   const analyzeLimit = payload.analyzeLimit || 120;
   const ranked = [...jobs.values()].sort((a, b) => b.heuristic - a.heuristic);
   const key = prefsKey(profile);
-  const toAnalyze = ranked.slice(0, analyzeLimit).filter((j) => !j.analysis || (j.analysis.prefsKey && j.analysis.prefsKey !== key));
+  const toAnalyze = ranked.filter((j) => !j.analysis || (j.analysis.prefsKey && j.analysis.prefsKey !== key)).slice(0, analyzeLimit);
   await log(`analyzing ${toAnalyze.length} listings with the LLM in batches of 10`);
   for (let i = 0; i < toAnalyze.length; i += 10) {
     const batch = toAnalyze.slice(i, i + 10);

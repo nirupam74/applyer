@@ -232,6 +232,12 @@ export function adaptProfileToTerm(profile, job, rules = {}) {
   return out;
 }
 
+// "RBC" / "Rbc", "Loblaw Agency" / "Loblaw Companies Limited", "Definity" / "Definity Financial" are one employer.
+export function employerKey(company) {
+  const words = String(company).toLowerCase().replace(/[^a-z0-9 ]+/g, '').split(/\s+/).filter(Boolean);
+  return words[0] && words[0].length > 2 ? words[0] : words.join(' ');
+}
+
 // The member's most optimised resume that fills the page limit: untailored before tailored,
 // then the best ATS score, then the newest.
 export function pickTemplate(versions, pageLimit) {
@@ -254,8 +260,9 @@ export async function prepareBatch({ db, uid, log }, payload = {}) {
   const snap = await userRef.collection('jobs').where('score', '>=', minScore).orderBy('score', 'desc').get();
   const todo = snap.docs.filter((d) => {
     const j = d.data();
-    return ['new', 'saved'].includes(j.status || 'new') && !((j.docs?.preparedAt?.toMillis?.() || 0) > validFrom);
-  }).slice(0, payload.limit || 50);
+    // only jobs the resume-to-job analysis has scored: a heuristic-only score can flatter a poor match
+    return j.matchPct != null && ['new', 'saved'].includes(j.status || 'new') && !((j.docs?.preparedAt?.toMillis?.() || 0) > validFrom);
+  }).slice(0, payload.limit || 150);
   let prepared = 0; const failed = [];
   for (const d of todo) {
     await log(`documents ${prepared + failed.length + 1} of ${todo.length}: ${d.data().title} at ${d.data().company}`);
@@ -266,11 +273,13 @@ export async function prepareBatch({ db, uid, log }, payload = {}) {
   const byCompany = new Map();
   for (const d of snap.docs) {
     const j = d.data();
-    if (!['new', 'saved'].includes(j.status || 'new') || !j.company) continue;
-    byCompany.set(j.company, [...(byCompany.get(j.company) || []), d]);
+    if (j.matchPct == null || !['new', 'saved'].includes(j.status || 'new') || !j.company) continue;
+    const key = employerKey(j.company);
+    byCompany.set(key, [...(byCompany.get(key) || []), d]);
   }
   let masters = 0;
-  for (const [company, docs] of byCompany) {
+  for (const docs of byCompany.values()) {
+    const company = docs[0].data().company;
     if (docs.length < 2 || docs.every((d) => fresh(d.data(), 'companyDocs'))) continue;
     await log(`master documents: ${company} (${docs.length} postings)`);
     try { await prepareDocuments({ db, uid, log }, { company, jobIds: docs.map((d) => d.id) }); masters++; } catch (err) { failed.push(`${company} master: ${err.message.split('\n')[0]}`); await log(`failed: ${err.message.split('\n')[0]}`); }

@@ -6,7 +6,7 @@ import { normalizeJob } from './browser.js';
 const BASE = 'https://jobs.hydroone.com';
 
 export const name = 'hydroone';
-export const queries = ['student', 'co-op', 'intern'];
+export const queries = ['student', 'co-op']; // "intern" also matches every "internal" posting
 
 export async function search({ query, page = 0 }, context) {
   const tab = await context.newPage();

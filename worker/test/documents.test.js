@@ -79,3 +79,12 @@ test('termFor + adaptProfileToTerm: long terms and return-to-school postings mov
   assert.deepEqual(adaptProfileToTerm(profile, { title: 'Co-op - 12 Months' }, {}), profile, 'no rules, no change');
   assert.equal(profile.education[0].graduation, 'Sept 2023 - June 2027 (expected)', 'input untouched');
 });
+
+test('employerKey groups spellings of one employer', async () => {
+  const { employerKey } = await import('../apply/documents.js');
+  assert.equal(employerKey('RBC'), employerKey('Rbc'));
+  assert.equal(employerKey('Loblaw Agency'), employerKey('Loblaw Companies Limited'));
+  assert.equal(employerKey('Definity'), employerKey('Definity Financial'));
+  assert.notEqual(employerKey('TD'), employerKey('Tangerine'));
+  assert.equal(employerKey('J.D. Irving'), 'jd irving');
+});
