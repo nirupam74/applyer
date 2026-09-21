@@ -58,7 +58,7 @@ function runClaude(prompt) {
         '--setting-sources',
         '',
       ],
-      { cwd: WORKER_DIR, maxBuffer: 20 * 1024 * 1024, timeout: 240_000 },
+      { cwd: WORKER_DIR, maxBuffer: 20 * 1024 * 1024, timeout: 420_000 },
       (err, stdout, stderr) => {
         if (err) {
           // execFile's message is only the command line; say why it died (timeout kill, signal, exit code).
@@ -82,9 +82,21 @@ export function parseLlmJson(text) {
   return JSON.parse(cleaned);
 }
 
+let apiOutUntil = 0;
+
 async function callOnce(prompt) {
   const key = apiKey();
-  if (key) return parseLlmJson(await runApi(prompt, key));
+  if (key && Date.now() > apiOutUntil) {
+    try {
+      return parseLlmJson(await runApi(prompt, key));
+    } catch (err) {
+      // A key with no credit left is not a wrong key: the work goes on through the claude CLI
+      // (the member's own plan), and the API is tried again in half an hour.
+      if (!/credit balance is too low/i.test(err.message)) throw err;
+      apiOutUntil = Date.now() + 30 * 60e3;
+      console.log(`${new Date().toISOString()} [llm] API credit exhausted, using the claude CLI for 30 min`);
+    }
+  }
   const stdout = await runClaude(prompt);
   const outer = JSON.parse(stdout);
   const result = outer.result;
