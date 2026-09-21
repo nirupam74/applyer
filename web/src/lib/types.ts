@@ -223,6 +223,8 @@ export interface Job {
   notes?: string
   // tailored resume + cover letter made by the worker for this job
   docs?: { resumeVersionId: string; coverLetterId: string; preparedAt: Timestamp }
+  // one master resume + cover letter shared by all of this employer's postings
+  companyDocs?: { resumeVersionId: string; coverLetterId: string; preparedAt: Timestamp }
   discoveredAt: Timestamp
   updatedAt: Timestamp
 }

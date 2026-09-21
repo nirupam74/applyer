@@ -61,6 +61,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   indeed: 'Indeed',
   ziprecruiter: 'ZipRecruiter',
   glassdoor: 'Glassdoor',
+  hydroone: 'Hydro One careers',
 }
 
 export function daysAgo(ts: { toDate(): Date } | null | undefined): number | null {

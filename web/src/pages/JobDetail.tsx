@@ -28,9 +28,10 @@ export default function JobDetail() {
   }
 
   // Fetched on click: each document carries up to ~1 MB of file bytes.
-  async function download(kind: 'resume' | 'cover', ext: 'pdf' | 'docx') {
-    if (!job?.docs) return
-    const snap = await getDoc(kind === 'resume' ? userDoc(uid, 'resumeVersions', job.docs.resumeVersionId) : userDoc(uid, 'coverLetters', job.docs.coverLetterId))
+  async function download(kind: 'resume' | 'cover', ext: 'pdf' | 'docx', set: 'docs' | 'companyDocs' = 'docs') {
+    const ids = job?.[set]
+    if (!ids) return
+    const snap = await getDoc(kind === 'resume' ? userDoc(uid, 'resumeVersions', ids.resumeVersionId) : userDoc(uid, 'coverLetters', ids.coverLetterId))
     const d = snap.data() as ResumeVersion | CoverLetter | undefined
     const bytes = ext === 'pdf' ? d?.pdfBytes : d?.docxBytes
     if (!d || !bytes) return
@@ -117,6 +118,18 @@ export default function JobDetail() {
                 {label}
               </button>
             ))}
+          </div>
+        )}
+        {job.companyDocs && (
+          <div className="mt-4">
+            <p className="text-sm text-[var(--text-muted)]">One master resume and cover letter for every {job.company} posting, for employers that take a single resume for all roles:</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {([['resume', 'pdf', 'Master resume PDF'], ['resume', 'docx', 'Master resume DOCX'], ['cover', 'pdf', 'Master cover letter PDF'], ['cover', 'docx', 'Master cover letter DOCX']] as const).map(([kind, ext, label]) => (
+                <button key={label} type="button" onClick={() => void download(kind, ext, 'companyDocs')} className={`${btn} border border-[var(--border)] text-[var(--text)] hover:bg-[var(--bg-sunken)]`}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {prepTaskId && <div className="mt-3"><TaskStatus uid={uid} taskId={prepTaskId} /></div>}

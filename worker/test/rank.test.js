@@ -62,11 +62,11 @@ test('finalScore blends heuristic and LLM match', () => {
   assert.equal(finalScore(80, 60), 67);
 });
 
-test('buildQueries: levels and case collapse into one query, up to 20 queries', () => {
-  const titles = ['Research technician I', 'Research technician II', 'research Technician III', 'technologist I', 'Clinical Research', ...Array.from({ length: 30 }, (_, i) => 'Role ' + 'abcdefghijklmnopqrstuvwxyzABCD'[i])];
+test('buildQueries: levels and case collapse into one query, up to 30 queries', () => {
+  const titles = ['Research technician I', 'Research technician II', 'research Technician III', 'technologist I', 'Clinical Research', ...Array.from({ length: 40 }, (_, i) => 'Role number ' + (i + 10))];
   const q = buildQueries({ preferences: { titles, locations: ['Toronto', 'Brampton'] } });
   assert.deepEqual(q.titles.slice(0, 3), ['Research technician', 'technologist', 'Clinical Research']);
-  assert.equal(q.titles.length, 20);
+  assert.equal(q.titles.length, 30);
   assert.equal(q.location, 'Toronto');
   assert.deepEqual(q.locations, ['Toronto', 'Brampton']);
   assert.deepEqual(buildQueries({ preferences: { titles: ['A'], locations: ['GTA', 'Greater Toronto Area'] } }).locations, ['Toronto, ON']);

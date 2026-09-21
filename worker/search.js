@@ -6,7 +6,7 @@ import { analyzeBatch, buildQueries, finalScore, heuristicScore, jobId, mergeJob
 
 const FieldValue = admin.firestore.FieldValue;
 const TOP_N = 100;
-const DETAIL_ORDER = ['linkedin', 'ziprecruiter', 'indeed', 'glassdoor'];
+const DETAIL_ORDER = ['hydroone', 'linkedin', 'ziprecruiter', 'indeed', 'glassdoor'];
 const BLOCKED_COOLDOWN_MS = 24 * 3600e3; // a source that was blocked is left alone for a day
 
 // searchJobs payload { sources?: string[], pagesPerQuery?, detailLimit?, analyzeLimit? }
@@ -18,7 +18,10 @@ export async function searchJobs({ db, uid, log }, payload) {
   const { titles, locations } = buildQueries(profile);
   if (!titles.length) throw new Error('profile has no preferred titles or experience to search from');
   const pagesPerQuery = payload.pagesPerQuery || 3; // first location; the member's other cities get one page each
-  const wanted = (payload.sources && payload.sources.length ? payload.sources : Object.keys(sources)).filter((s) => sources[s]);
+  // Job boards always; a company's own site (it exports its own `queries`) only for members who list it.
+  const companySources = (await userRef.collection('settings').doc('jobs').get()).data()?.companySources || [];
+  const usual = Object.keys(sources).filter((s) => !sources[s].queries || companySources.includes(s));
+  const wanted = (payload.sources && payload.sources.length ? payload.sources : usual).filter((s) => sources[s]);
   await log(`${titles.length} queries in ${locations.map((l) => `"${l}"`).join(', ')}: ${titles.join(' | ')}`);
 
   // 1. Scrape. Each source gets a run doc with status ok | blocked | error.
@@ -40,10 +43,11 @@ export async function searchJobs({ db, uid, log }, payload) {
       let message = '';
       let count = 0;
       let failures = 0;
-      outer: for (const [li, location] of locations.entries()) for (const query of titles) {
+      const company = !!adapter.queries;
+      outer: for (const [li, location] of (company ? locations.slice(0, 1) : locations).entries()) for (const query of adapter.queries || titles) {
         // A board that cannot pin this city would search the whole country instead (Glassdoor).
         if (li > 0 && adapter.knowsLocation && !adapter.knowsLocation(location)) continue outer;
-        for (let page = 0; page < (li ? 1 : pagesPerQuery); page++) {
+        for (let page = 0; page < (company ? 20 : li ? 1 : pagesPerQuery); page++) {
           let res;
           try {
             res = await adapter.search({ query, location, page }, context);

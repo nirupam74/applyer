@@ -55,15 +55,34 @@ export function buildCoverLetterDocx({ personal = {}, company, date, paragraphs,
 // prepareDocuments({ db, uid, log }, { jobId }) -> { resumeVersionId, coverLetterId, resumePath, coverPath, email }
 // Builds a job-tailored resume version and a cover letter for one job, and writes both PDFs to
 // disk for the browser agent to upload.
-export async function prepareDocuments({ db, uid, log }, { jobId }) {
-  if (!jobId) throw new Error('prepareDocuments requires payload.jobId');
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(jobId)) throw new Error('invalid jobId');
+// With { company, jobIds } instead of { jobId } it makes ONE master resume and cover letter for all
+// of that employer's postings (some employers take a single resume for every role) and stamps them
+// on each of those jobs as `companyDocs`.
+export async function prepareDocuments({ db, uid, log }, { jobId, company, jobIds = [] }) {
   const userRef = db.collection('users').doc(uid);
-
-  await log(`loading job ${jobId}`);
-  const jobSnap = await userRef.collection('jobs').doc(jobId).get();
-  if (!jobSnap.exists) throw new Error(`job ${jobId} not found`);
-  const job = jobSnap.data();
+  let job, termJob, targets;
+  if (company) {
+    const roles = (await Promise.all(jobIds.slice(0, 12).map((id) => userRef.collection('jobs').doc(String(id)).get()))).filter((s) => s.exists);
+    if (roles.length < 2) throw new Error(`a master resume for ${company} needs at least two of its postings`);
+    await log(`master documents for ${company}: ${roles.length} postings`);
+    const data = roles.map((s) => s.data());
+    job = {
+      company,
+      title: `${company} student roles: ${data.map((r) => r.title).join('; ')}`.slice(0, 600),
+      description: data.map((r) => `ROLE: ${r.title}\n${(r.description || '').slice(0, 1800)}`).join('\n\n'),
+      analysis: { strong: data.flatMap((r) => r.analysis?.strong || []).slice(0, 8), advantages: data.flatMap((r) => r.analysis?.advantages || []).slice(0, 5) },
+    };
+    termJob = [...data].sort((a, b) => termFor(a).months - termFor(b).months)[Math.floor(data.length / 2)]; // the typical term
+    targets = roles.map((s) => s.ref);
+  } else {
+    if (!jobId) throw new Error('prepareDocuments requires payload.jobId');
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(jobId)) throw new Error('invalid jobId');
+    await log(`loading job ${jobId}`);
+    const jobSnap = await userRef.collection('jobs').doc(jobId).get();
+    if (!jobSnap.exists) throw new Error(`job ${jobId} not found`);
+    job = termJob = jobSnap.data();
+    targets = [jobSnap.ref];
+  }
 
   await log('loading profile and settings');
   const profileSnap = await userRef.collection('profile').doc('profile').get();
@@ -82,6 +101,9 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
 
   const applicationEmail = resolveApplicationEmail(profile, appSettingsSnap.exists ? appSettingsSnap.data() : null);
   profile = { ...profile, personal: { ...(profile.personal || {}), email: applicationEmail } };
+  const adapted = adaptProfileToTerm(profile, termJob, appSettingsSnap.exists ? appSettingsSnap.data() : {});
+  if (adapted.education?.[0]?.graduation !== profile.education?.[0]?.graduation) await log(`term of ${termFor(termJob).months || '?'} months: graduation shown as ${adapted.education[0].graduation}`);
+  profile = adapted;
   const name = profile.personal.name || 'Resume';
 
   const pageLimit = Number(resumeSettingsSnap.exists && resumeSettingsSnap.data().maxPages) || 1;
@@ -90,7 +112,7 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   // overshot the page by about 13 lines every time and paid for 2-3 condensing rounds (3 minutes).
   // It only guides size (the facts come from the profile), so one older than the last profile edit
   // is fine: without any template a 2-page CV overshot by 48 lines and never got back under the limit.
-  const recent = await userRef.collection('resumeVersions').orderBy('createdAt', 'desc').limit(30).select('structured', 'fits', 'pageLimit', 'createdAt', 'ats', 'jobId').get();
+  const recent = await userRef.collection('resumeVersions').orderBy('createdAt', 'desc').limit(30).select('structured', 'fits', 'pageLimit', 'createdAt', 'ats', 'jobId', 'company').get();
   const fitted = pickTemplate(recent.docs.map((d) => d.data()), pageLimit)?.structured;
 
   // The cover letter does not depend on the resume: both LLM calls run at once.
@@ -121,8 +143,9 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   const versionRef = userRef.collection('resumeVersions').doc();
   await versionRef.set({
     resumeId,
-    jobId,
-    label: `Tailored for ${job.company} ${job.title}`,
+    jobId: jobId || null,
+    ...(company ? { company } : {}),
+    label: company ? `Master for ${company} (${targets.length} roles)` : `Tailored for ${job.company} ${job.title}`,
     structured,
     ats,
     docxBytes: fit.docx,
@@ -148,7 +171,8 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   const coverRef = userRef.collection('coverLetters').doc();
   const coverFileName = `${name} - Cover Letter`;
   await coverRef.set({
-    jobId,
+    jobId: jobId || null,
+    ...(company ? { company } : {}),
     resumeVersionId: versionRef.id,
     text: clText,
     docxBytes: clDocx,
@@ -158,7 +182,7 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   });
 
   await log('writing PDFs to disk');
-  const dir = path.join(os.homedir(), '.applyer', 'applications', uid, jobId);
+  const dir = path.join(os.homedir(), '.applyer', 'applications', uid, jobId || `company-${sanitizeFileName(company)}`);
   await fs.mkdir(dir, { recursive: true });
   const resumePath = path.join(dir, `${sanitizeFileName(`${name} - Resume`)}.pdf`);
   const coverPath = path.join(dir, `${sanitizeFileName(coverFileName)}.pdf`);
@@ -166,9 +190,46 @@ export async function prepareDocuments({ db, uid, log }, { jobId }) {
   await fs.writeFile(coverPath, clPdf);
 
   // The dashboard reads this to offer the downloads on the job itself (the user applies by hand).
-  await userRef.collection('jobs').doc(jobId).update({ docs: { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, preparedAt: FieldValue.serverTimestamp() } }).catch(() => {});
+  const stamp = { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, preparedAt: FieldValue.serverTimestamp() };
+  for (const ref of targets) await ref.update({ [company ? 'companyDocs' : 'docs']: stamp }).catch(() => {});
 
   return { resumeVersionId: versionRef.id, coverLetterId: coverRef.id, resumePath, coverPath, email: applicationEmail };
+}
+
+// How long the work term is and whether the posting wants the student back in school afterwards,
+// read from the posting itself ("12 Months", "8-12 months", "16-month", "must be returning to school").
+export function termFor(job) {
+  const text = `${job.title || ''}\n${job.description || ''}`;
+  const SPAN = /(\d{1,2})\s*(?:-|–|to|or|\/)?\s*(\d{1,2})?\s*-?\s*months?\b/gi;
+  const read = (s, needContext) => [...s.matchAll(SPAN)]
+    // in running text a number of months only counts next to a word about the term ("4 month term", "duration: 12 months")
+    .filter((m) => !needContext || /(term|co-?op|intern|placement|contract|temporary|position|assignment|duration|length|work)/i.test(s.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30)) && !/^.{0,15}experience/i.test(s.slice(m.index + m[0].length)))
+    .map((m) => Math.max(Number(m[1]), Number(m[2] || 0)))
+    .filter((n) => n >= 3 && n <= 24);
+  const inTitle = read(job.title || '', false);
+  const inText = read(job.description || '', true);
+  return {
+    months: inTitle[0] || (inText.length ? Math.max(...inText) : 0),
+    mustReturn: /return(ing)? to (school|stud|full[- ]time|university|an? (academic|degree))|returning (student|to)|enrol+ed .{0,60}(after|following|upon completion)|not .{0,20}in (your|their) (final|last) (term|semester|year)/i.test(text),
+  };
+}
+
+// A member may say how their documents change with the length of the term (settings/applications):
+// longTermGraduation (terms of 8+ months push graduation back), returnGraduation (the posting wants
+// a student who returns to school afterwards), longTermAvailability ("... {months} ..."). Members
+// without these settings are never touched.
+export function adaptProfileToTerm(profile, job, rules = {}) {
+  const { months, mustReturn } = termFor(job);
+  const grad = months >= 8 ? rules.longTermGraduation : mustReturn ? rules.returnGraduation : '';
+  const out = { ...profile };
+  if (grad && out.education?.length) {
+    const [first, ...rest] = out.education;
+    const g = String(first.graduation || '');
+    const swapped = g.replace(/[A-Z][a-z]+\.? \d{4}(?=\s*(\(|$))/, grad);
+    out.education = [{ ...first, graduation: swapped !== g ? swapped : `${grad} (expected)` }, ...rest];
+  }
+  if (months >= 8 && rules.longTermAvailability) out.availability = rules.longTermAvailability.replace('{months}', String(months));
+  return out;
 }
 
 // The member's most optimised resume that fills the page limit: untailored before tailored,
@@ -177,7 +238,7 @@ export function pickTemplate(versions, pageLimit) {
   const ms = (v) => v.createdAt?.toMillis?.() || 0;
   return versions
     .filter((v) => v.fits && v.pageLimit === pageLimit && v.structured)
-    .sort((a, b) => !!a.jobId - !!b.jobId || (b.ats?.score || 0) - (a.ats?.score || 0) || ms(b) - ms(a))[0];
+    .sort((a, b) => !!(a.jobId || a.company) - !!(b.jobId || b.company) || (b.ats?.score || 0) - (a.ats?.score || 0) || ms(b) - ms(a))[0];
 }
 
 // prepareBatch({ db, uid, log }, { minScore?, limit? })
@@ -200,5 +261,19 @@ export async function prepareBatch({ db, uid, log }, payload = {}) {
     await log(`documents ${prepared + failed.length + 1} of ${todo.length}: ${d.data().title} at ${d.data().company}`);
     try { await prepareDocuments({ db, uid, log }, { jobId: d.id }); prepared++; } catch (err) { failed.push(`${d.data().company}: ${err.message.split('\n')[0]}`); await log(`failed: ${err.message.split('\n')[0]}`); }
   }
-  return { total: todo.length, prepared, failed };
+  // One master resume + cover letter per employer with two or more of these postings.
+  const fresh = (j, field) => (j[field]?.preparedAt?.toMillis?.() || 0) > validFrom;
+  const byCompany = new Map();
+  for (const d of snap.docs) {
+    const j = d.data();
+    if (!['new', 'saved'].includes(j.status || 'new') || !j.company) continue;
+    byCompany.set(j.company, [...(byCompany.get(j.company) || []), d]);
+  }
+  let masters = 0;
+  for (const [company, docs] of byCompany) {
+    if (docs.length < 2 || docs.every((d) => fresh(d.data(), 'companyDocs'))) continue;
+    await log(`master documents: ${company} (${docs.length} postings)`);
+    try { await prepareDocuments({ db, uid, log }, { company, jobIds: docs.map((d) => d.id) }); masters++; } catch (err) { failed.push(`${company} master: ${err.message.split('\n')[0]}`); await log(`failed: ${err.message.split('\n')[0]}`); }
+  }
+  return { total: todo.length, prepared, masters, failed };
 }

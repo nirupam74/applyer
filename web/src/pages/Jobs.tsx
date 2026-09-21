@@ -109,7 +109,7 @@ export default function Jobs() {
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--text-muted)]">
-        {SOURCES.map((s) => {
+        {[...SOURCES, ...Object.keys(runs).filter((k) => !(SOURCES as readonly string[]).includes(k))].map((s) => {
           const r = runs[s]
           return (
             <span key={s}>

@@ -59,3 +59,23 @@ test('pickTemplate: untailored before tailored, then best ATS, only versions tha
   assert.equal(pick([v('overflow', { fits: false, ats: { score: 99 } }), v('onepage', { pageLimit: 1 }), v('tailored', { jobId: 'j' })]), 'tailored');
   assert.equal(pick([]), undefined);
 });
+
+test('termFor + adaptProfileToTerm: long terms and return-to-school postings move the graduation date, only for members with rules', async () => {
+  const { termFor, adaptProfileToTerm } = await import('../apply/documents.js');
+  assert.equal(termFor({ title: 'University Co-Op Student - Strategic Finance - 12 months - Winter 2027 - Toronto' }).months, 12);
+  assert.equal(termFor({ title: 'Telecom Operations Support - 8-12 Months - Winter 2027' }).months, 12);
+  assert.equal(termFor({ title: 'Marketing Intern', description: 'This is a 4 month term. The company has been growing for the last 24 months in a row, every year.' }).months, 4);
+  assert.equal(termFor({ title: 'Analyst Intern', description: 'Requires 12 months of work experience in an internship.' }).months, 0);
+  assert.equal(termFor({ title: 'Intern', description: 'Candidates must be returning to school after the work term.' }).mustReturn, true);
+  assert.equal(termFor({ title: 'Intern', description: 'Great team.' }).mustReturn, false);
+  const profile = { availability: 'Winter 2027', education: [{ graduation: 'Sept 2023 - June 2027 (expected)' }, { graduation: '2019' }] };
+  const rules = { longTermGraduation: 'June 2028', returnGraduation: 'November 2027', longTermAvailability: 'Available from January 2027 for {months} months' };
+  const long = adaptProfileToTerm(profile, { title: 'Co-op - 12 Months' }, rules);
+  assert.equal(long.education[0].graduation, 'Sept 2023 - June 2028 (expected)');
+  assert.equal(long.education[1].graduation, '2019');
+  assert.equal(long.availability, 'Available from January 2027 for 12 months');
+  assert.equal(adaptProfileToTerm(profile, { title: 'Intern', description: 'must be returning to school' }, rules).education[0].graduation, 'Sept 2023 - November 2027 (expected)');
+  assert.deepEqual(adaptProfileToTerm(profile, { title: 'Co-op - 4 Months' }, rules), profile);
+  assert.deepEqual(adaptProfileToTerm(profile, { title: 'Co-op - 12 Months' }, {}), profile, 'no rules, no change');
+  assert.equal(profile.education[0].graduation, 'Sept 2023 - June 2027 (expected)', 'input untouched');
+});

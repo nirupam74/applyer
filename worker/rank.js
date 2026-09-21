@@ -71,7 +71,7 @@ export function buildQueries(profile) {
   const fallback = profile.personal && profile.personal.location;
   const locations = [...new Set((prefs.locations || []).map((l) => searchLocation([l])).filter((l) => l !== 'Canada'))].slice(0, 3);
   if (!locations.length) locations.push(searchLocation([], fallback));
-  return { titles: [...titles.values()].slice(0, 20), location: locations[0], locations };
+  return { titles: [...titles.values()].slice(0, 30), location: locations[0], locations };
 }
 
 export function searchLocation(locations, fallback) {
