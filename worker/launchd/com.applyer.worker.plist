@@ -7,10 +7,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Volumes/X9 Pro/Applyer/worker/index.js</string>
+    <string>/Volumes/X9 Pro/Automated Services/Job Applyer/worker/index.js</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Volumes/X9 Pro/Applyer/worker</string>
+  <string>/Volumes/X9 Pro/Automated Services/Job Applyer/worker</string>
   <key>KeepAlive</key>
   <true/>
   <key>RunAtLoad</key>
