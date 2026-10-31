@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Applyer worker: parses resumes, calls claude -p, generates DOCX, writes to Firestore.",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",

@@ -6,7 +6,7 @@
   <string>com.applyer.worker</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
+    <string>/Users/nirupam/.nvm/versions/node/v22.23.3/bin/node</string>
     <string>/Volumes/X9 Pro/Automated Services/Job Applyer/worker/index.js</string>
   </array>
   <key>WorkingDirectory</key>
