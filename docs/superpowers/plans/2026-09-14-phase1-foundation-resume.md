@@ -10,7 +10,7 @@
 
 ## Global Constraints
 - Firebase project `applyer-jobs`, web app id `1:692780340256:web:4a5eddacb7e8d9f8c55845`, Firestore region northamerica-northeast2 (already provisioned).
-- Web SDK config (public, fine in frontend): apiKey `REDACTED_FIREBASE_WEB_KEY`, authDomain `applyer-jobs.firebaseapp.com`, projectId `applyer-jobs`, appId above.
+- Web SDK config (public, fine in frontend): apiKey in `web/.env.local` (VITE_FIREBASE_API_KEY), authDomain `applyer-jobs.firebaseapp.com`, projectId `applyer-jobs`, appId above.
 - Worker credentials: `~/.applyer/sa.json` (exists, chmod 600). Never copy into repo. Read via `GOOGLE_APPLICATION_CREDENTIALS` or explicit path.
 - Vite 5 only (Vite 8 does not build on this machine's SSD).
 - No signup UI. Accounts are created by `worker/scripts/create-users.mjs`.

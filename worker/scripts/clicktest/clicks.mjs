@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import { session, watch } from './crawl.mjs';
 const BASE = process.env.BASE || 'https://applyer-jobs.web.app';
 const db = admin.firestore();
-const ME = 'MEMBER1_UID';
-const HER = 'MEMBER2_UID';
+const ME = process.env.MEMBER1_UID;
+const HER = process.env.MEMBER2_UID;
 const ONLY = (process.env.ONLY || '').split(',').filter(Boolean);
 const results = [];
 let errors = [];
@@ -275,7 +275,7 @@ const browser = await chromium.launch();
 {
   const ctx = await session(browser, HER);
   const pBefore = (await db.doc(`users/${HER}/profile/profile`).get()).data().updatedAt;
-  await step('member2 (read-only): nav round trip with empty data', async () => {
+  await step('member 2 (read-only): nav round trip with empty data', async () => {
     const p = await open(ctx, '/home');
     for (const label of ['Jobs', 'Applications', 'Resume', 'Profile', 'Assistant', 'Home']) {
       await p.locator('header, nav').getByRole('link', { name: label, exact: true }).first().click();
@@ -284,7 +284,7 @@ const browser = await chromium.launch();
     }
     await p.close();
   });
-  await step('member2 (read-only): each version opens in compare view with publications, PDF downloads', async () => {
+  await step('member 2 (read-only): each version opens in compare view with publications, PDF downloads', async () => {
     const p = await open(ctx, '/resume');
     const rows = p.locator('main li, main div').filter({ has: p.getByRole('button', { name: 'Delete' }) }).filter({ hasText: /^(?!.*Versions)/ });
     const out = [];
@@ -299,7 +299,7 @@ const browser = await chromium.launch();
     await p.close();
     return out.join(' ;; ');
   });
-  await step('member2 (read-only): profile renders her publications / awards / volunteer, nothing written', async () => {
+  await step('member 2 (read-only): profile renders her publications / awards / volunteer, nothing written', async () => {
     const p = await open(ctx, '/profile');
     const text = await p.locator('main').innerText();
     const tas = await p.locator('main textarea').evaluateAll((els) => els.map((e) => e.value.split('\n').filter(Boolean).length));

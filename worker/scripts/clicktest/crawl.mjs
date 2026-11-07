@@ -3,7 +3,7 @@ import admin from 'firebase-admin';
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import os from 'node:os';
-const KEY = 'REDACTED_FIREBASE_WEB_KEY';
+const KEY = process.env.FIREBASE_WEB_KEY; // same value as web/.env.local VITE_FIREBASE_API_KEY
 const BASE = process.env.BASE || 'https://applyer-jobs.web.app';
 const OUT = process.env.OUT;
 admin.initializeApp({ credential: admin.credential.cert(JSON.parse(fs.readFileSync(os.homedir() + '/.applyer/sa.json', 'utf8'))) });
@@ -27,7 +27,7 @@ export function watch(page, errors) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const users = { nirupam: 'MEMBER1_UID', member2: 'MEMBER2_UID' };
+  const users = { member1: process.env.MEMBER1_UID, member2: process.env.MEMBER2_UID };
   const browser = await chromium.launch();
   for (const [name, uid] of Object.entries(users)) {
     const routes = ['/home', '/jobs', '/applications', '/resume', '/profile', '/assistant', '/answers', '/nope'];
